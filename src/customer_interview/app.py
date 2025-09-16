@@ -27,16 +27,49 @@ try:
 except Exception:
     pass
 
-# --- Secrets -> Environment (Variante A) -------------------------------------
-if "OPENAI_API_KEY" in st.secrets:
-    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-if "YOU_API_KEY" in st.secrets:
-    os.environ["YOU_API_KEY"] = st.secrets["YOU_API_KEY"]
+# --- Secrets -> Environment (robust: flach ODER verschachtelt) ---------------
+def _hydrate_keys_from_secrets():
+    def _get_nested(section, key):
+        try:
+            return str(st.secrets[section][key]).strip()
+        except Exception:
+            return ""
 
-# (optional) weitere Flags aus Secrets übernehmen
-for k in ("MODEL_NAME","YOU_SEARCH_ENABLED","ANSWER_MIN_SENTENCES","ANSWER_MAX_SENTENCES","ENABLE_MICRO_PROBE"):
-    if k in st.secrets:
-        os.environ[k] = str(st.secrets[k]).strip()
+    def _set_if_missing(env_key, *candidates):
+        if os.getenv(env_key, "").strip():
+            return
+        for cand in candidates:
+            val = ""
+            if isinstance(cand, tuple):
+                val = _get_nested(cand[0], cand[1])
+            else:
+                try:
+                    if cand in st.secrets:
+                        val = str(st.secrets[cand]).strip()
+                except Exception:
+                    pass
+            if val:
+                os.environ[env_key] = val
+                break
+
+    # Primärschlüssel
+    _set_if_missing("OPENAI_API_KEY", "OPENAI_API_KEY", ("openai", "openai_api_key"))
+    _set_if_missing("YOU_API_KEY", "YOU_API_KEY", ("you", "api_key"))
+
+    # optionale Flags
+    for k in ("MODEL_NAME", "YOU_SEARCH_ENABLED", "ANSWER_MIN_SENTENCES",
+              "ANSWER_MAX_SENTENCES", "ENABLE_MICRO_PROBE"):
+        if not os.getenv(k, "").strip():
+            try:
+                if k in st.secrets:
+                    os.environ[k] = str(st.secrets[k]).strip()
+            except Exception:
+                pass
+
+# 1. Hydration so früh wie möglich
+_hydrate_keys_from_secrets()
+# -----------------------------------------------------------------------------
+
 
 # --- SQLite upgrade shim (force pysqlite3 if stdlib sqlite is too old) -------
 import sys as _sys
