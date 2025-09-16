@@ -273,9 +273,8 @@ st.caption("Define idea → segment customers → guidelines → simulate interv
 
 with st.sidebar:
     st.subheader("Settings")
-    ui_api = st.text_input("OpenAI API Key", value=(os.getenv("OPENAI_API_KEY") or ""), type="password")
-    if ui_api:
-        os.environ["OPENAI_API_KEY"] = ui_api.strip()
+
+    # (API-Key-Felder entfernt – Keys kommen aus st.secrets / Environment)
 
     st.markdown("---")
     st.write("**Run options**")
@@ -289,9 +288,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.write("**Web search (You.com)**")
-    you_api = st.text_input("You.com API Key", value=os.getenv("YOU_API_KEY",""), type="password")
-    if you_api:
-        os.environ["YOU_API_KEY"] = you_api.strip()
     use_search = st.toggle("Use web search (You.com)", value=os.getenv("YOU_SEARCH_ENABLED","false").lower()=="true")
     os.environ["YOU_SEARCH_ENABLED"] = "true" if use_search else "false"
     you_k = st.slider("Max results per query (You.com)", 3, 10, int(os.getenv("YOU_MAX_RESULTS","6")), 1)
