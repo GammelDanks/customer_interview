@@ -1,5 +1,6 @@
 # src/customer_interview/crew.py
 import os
+import re
 import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -574,6 +575,60 @@ class ValidationCrew:
         out = self._run_single(task)
         return self._safe_json(out)
 
+    # ---------- Sanitizer helpers (prefix & percentages) ----------
+    @staticmethod
+    def _strip_stock_prefix(s: str) -> str:
+        """Remove common boilerplate like 'I now can give (you) a great answer' at start."""
+        if not s:
+            return s
+        patterns = [
+            r"^\s*i\s+now\s+can\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
+            r"^\s*now\s+i\s+can\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
+            r"^\s*i\s+can\s+now\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
+        ]
+        out = s
+        for p in patterns:
+            out = re.sub(p, "", out, flags=re.IGNORECASE)
+        # Also strip stray leading quotes/backticks
+        out = re.sub(r"^\s*[`'\"]\s*", "", out)
+        return out.lstrip()
+
+    @staticmethod
+    def _soften_extra_percentages(s: str) -> str:
+        """
+        Keep at most the first numeric percentage as-is; convert subsequent % mentions
+        into qualitative phrases to avoid mechanical feel.
+        """
+        if not s or "%" not in s:
+            return s
+
+        descriptors = ["a small amount", "a moderate amount", "a noticeable amount", "a significant amount"]
+        idx = {"count": 0}
+
+        def repl(m: re.Match) -> str:
+            val = m.group(0)
+            idx["count"] += 1
+            if idx["count"] == 1:
+                return val  # keep the first numeric %
+            # replace subsequent with a descriptor (no number)
+            d = descriptors[(idx["count"] - 2) % len(descriptors)]
+            # preserve surrounding spacing/punctuation
+            # Replace the whole token with 'a moderate amount'
+            return d
+
+        # Replace tokens like '15%' or '15 %' or 'about 20%'
+        return re.sub(r"\b(?:about|around|approx\.?)?\s*\d{1,3}\s?%\b", repl, s, flags=re.IGNORECASE)
+
+    @classmethod
+    def _sanitize_text(cls, s: str) -> str:
+        s = cls._strip_stock_prefix(s or "")
+        s = cls._soften_extra_percentages(s)
+        # Tidy whitespace
+        s = re.sub(r"\s+\n", "\n", s)
+        s = re.sub(r"\n{3,}", "\n\n", s)
+        s = re.sub(r"[ \t]{2,}", " ", s)
+        return s.strip()
+
     def run_interviews_per_segment(self, max_turns: int = 20) -> List[Dict[str, Any]]:
         """
         Simulate interviews per segment for two archetypes: 'critical' and 'open_reflective'.
@@ -960,8 +1015,9 @@ class ValidationCrew:
                 "ANSWER FORMAT:\n"
                 f"- {ANSWER_MIN_SENTENCES} to {ANSWER_MAX_SENTENCES} full sentences in natural English.\n"
                 "- Include at least one brief, concrete anecdote (e.g., 'last week…' or 'for instance…').\n"
-                "- Include at least ONE concrete number if possible (€, %, minutes/week, times/week, or #tools).\n"
+                "- Use numbers sparingly. At most ONE percentage per answer; prefer ranges or absolute units (€, minutes/week, #tools). If unsure, say 'roughly'.\n"
                 "- Anchor statements in the last 3–6 months when relevant (recency).\n"
+                "- Start directly with your point; do NOT begin with stock phrases like 'I now can give a great answer' or similar.\n"
                 "- No bullet points, no markdown, no note fragments.\n\n"
                 f"Role/segment: {customer.role}\n"
                 f"Backstory: {getattr(customer, 'backstory', '')}\n"
@@ -974,16 +1030,19 @@ class ValidationCrew:
 
             cust_task = _mk_task(cust_desc, "A short, credible answer (3–6 sentences).", customer)
             ans = str(self._run_single(cust_task)).strip()
+            ans = self._sanitize_text(ans)
 
             if ENABLE_MICRO_PROBE and (turns + 1 < max_turns):
-                probe = "Can you ground that in one concrete situation with a rough number (€, %, minutes/week, or times/week)?"
+                probe = "Can you ground that in one concrete situation with a rough number (€, minutes/week, or times/week)? Avoid extra percentages."
                 probe_desc = (
                     "You are still the interviewee. "
-                    "Answer this follow-up in 2–3 sentences with one brief, concrete example and at least one number.\n"
+                    "Answer this follow-up in 2–3 sentences with one brief, concrete example. "
+                    "Use numbers sparingly; avoid more percentages.\n"
                     f"Follow-up: {probe}"
                 )
                 probe_task = _mk_task(probe_desc, "A brief follow-up answer (2–3 sentences).", customer)
                 probe_ans = str(self._run_single(probe_task)).strip()
+                probe_ans = self._sanitize_text(probe_ans)
                 ans = (ans + " " + probe_ans).strip()
 
             if facts:
@@ -997,6 +1056,7 @@ class ValidationCrew:
                     customer,
                 )
                 chk_ans = str(self._run_single(chk_task)).strip()
+                chk_ans = self._sanitize_text(chk_ans)
                 ans = (ans + " " + chk_ans).strip()
 
             transcript[-1]["answer"] = ans
@@ -1098,3 +1158,39 @@ class ValidationCrew:
                 pass
 
         return {}
+
+
+# ===== SAFETY PATCH: ensure _task_def exists on ValidationCrew ===============
+def __ensure__task_def__exists():
+    # Fallback implementation used if the method is missing (avoids AttributeError)
+    def _task_def_fallback(self, name: str) -> Dict[str, Any]:
+        """
+        Robust task lookup. If tasks.yaml is missing a name, return a soft fallback
+        so the run can continue instead of crashing.
+        """
+        try:
+            for t in (getattr(self, "tasks_spec", {}) or {}).get("tasks", []):
+                if (t.get("name") or "").strip() == name:
+                    return t
+        except Exception:
+            pass
+        # Soft fallback description to keep the pipeline running
+        return {
+            "name": name,
+            "description": (
+                f"[AUTO-FALLBACK for '{name}'] Return exactly ONE JSON object "
+                f"following the schema expected by the code. No markdown, no fences."
+            ),
+        }
+
+    try:
+        if not hasattr(ValidationCrew, "_task_def"):
+            ValidationCrew._task_def = _task_def_fallback  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            ValidationCrew._task_def = _task_def_fallback  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+__ensure__task_def__exists()
+# ===== END SAFETY PATCH ======================================================
