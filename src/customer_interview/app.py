@@ -27,6 +27,17 @@ try:
 except Exception:
     pass
 
+# --- NEW: Secrets -> Environment (Variante A) -------------------------------
+if "OPENAI_API_KEY" in st.secrets:
+    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+if "YOU_API_KEY" in st.secrets:
+    os.environ["YOU_API_KEY"] = st.secrets["YOU_API_KEY"]
+
+# (optional) weitere Flags aus Secrets übernehmen
+for k in ("MODEL_NAME","YOU_SEARCH_ENABLED","ANSWER_MIN_SENTENCES","ANSWER_MAX_SENTENCES","ENABLE_MICRO_PROBE"):
+    if k in st.secrets:
+        os.environ[k] = str(st.secrets[k]).strip()
+
 # Basic env defaults
 os.environ.setdefault("MODEL_NAME", os.getenv("MODEL_NAME", "gpt-4o-mini"))
 os.environ.setdefault("ANSWER_MIN_SENTENCES", "3")
