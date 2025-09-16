@@ -5,3 +5,4 @@ streamlit>=1.37.0
 pandas>=2.0
 requests>=2.31
 tiktoken>=0.5
+pysqlite3-binary>=0.5
