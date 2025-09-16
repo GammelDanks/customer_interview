@@ -1164,7 +1164,7 @@ class ValidationCrew:
             "per_segment_requirements": norm_per,
         }
 
-    def derive_product_requirements(self) -> Dict[str, Any]:
+    def derive_product_requirements(self) -> Dict[str, Any]]:
         product_owner = (
             self.agents.get("product_owner")
             or self.agents.get("strategist")
@@ -1219,3 +1219,18 @@ class ValidationCrew:
     def cross_segment_comparison(self, weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         self.comparison = {}
         return self.comparison
+
+    # ---------- UI helper (missing earlier) ----------
+    def segments_with_archetypes(self) -> List[Dict[str, Any]]:
+        """
+        Utility to merge archetypes into segments for nicer UI rendering.
+        Does not change pipeline behavior.
+        """
+        by_seg = {a["segment"]: a.get("customers", []) for a in self.archetypes}
+        merged: List[Dict[str, Any]] = []
+        for s in self.segments:
+            segname = s.get("name")
+            block = dict(s)
+            block["archetypes"] = by_seg.get(segname, [])
+            merged.append(block)
+        return merged
