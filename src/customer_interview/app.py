@@ -27,7 +27,7 @@ try:
 except Exception:
     pass
 
-# --- NEW: Secrets -> Environment (Variante A) -------------------------------
+# --- Secrets -> Environment (Variante A) -------------------------------------
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 if "YOU_API_KEY" in st.secrets:
@@ -37,6 +37,18 @@ if "YOU_API_KEY" in st.secrets:
 for k in ("MODEL_NAME","YOU_SEARCH_ENABLED","ANSWER_MIN_SENTENCES","ANSWER_MAX_SENTENCES","ENABLE_MICRO_PROBE"):
     if k in st.secrets:
         os.environ[k] = str(st.secrets[k]).strip()
+
+# --- SQLite shim (fix für chromadb auf Streamlit Cloud) ----------------------
+try:
+    import sqlite3  # wenn das klappt, ist alles okay
+except Exception:
+    try:
+        import pysqlite3
+        import sys as _sys
+        _sys.modules["sqlite3"] = _sys.modules["pysqlite3"]
+    except Exception:
+        pass
+# -----------------------------------------------------------------------------
 
 # Basic env defaults
 os.environ.setdefault("MODEL_NAME", os.getenv("MODEL_NAME", "gpt-4o-mini"))
