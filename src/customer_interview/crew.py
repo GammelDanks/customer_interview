@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
-from urllib.parse import urlparse  # NEW
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, LLM
@@ -575,60 +575,6 @@ class ValidationCrew:
         out = self._run_single(task)
         return self._safe_json(out)
 
-    # ---------- Sanitizer helpers (prefix & percentages) ----------
-    @staticmethod
-    def _strip_stock_prefix(s: str) -> str:
-        """Remove common boilerplate like 'I now can give (you) a great answer' at start."""
-        if not s:
-            return s
-        patterns = [
-            r"^\s*i\s+now\s+can\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
-            r"^\s*now\s+i\s+can\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
-            r"^\s*i\s+can\s+now\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
-        ]
-        out = s
-        for p in patterns:
-            out = re.sub(p, "", out, flags=re.IGNORECASE)
-        # Also strip stray leading quotes/backticks
-        out = re.sub(r"^\s*[`'\"]\s*", "", out)
-        return out.lstrip()
-
-    @staticmethod
-    def _soften_extra_percentages(s: str) -> str:
-        """
-        Keep at most the first numeric percentage as-is; convert subsequent % mentions
-        into qualitative phrases to avoid mechanical feel.
-        """
-        if not s or "%" not in s:
-            return s
-
-        descriptors = ["a small amount", "a moderate amount", "a noticeable amount", "a significant amount"]
-        idx = {"count": 0}
-
-        def repl(m: re.Match) -> str:
-            val = m.group(0)
-            idx["count"] += 1
-            if idx["count"] == 1:
-                return val  # keep the first numeric %
-            # replace subsequent with a descriptor (no number)
-            d = descriptors[(idx["count"] - 2) % len(descriptors)]
-            # preserve surrounding spacing/punctuation
-            # Replace the whole token with 'a moderate amount'
-            return d
-
-        # Replace tokens like '15%' or '15 %' or 'about 20%'
-        return re.sub(r"\b(?:about|around|approx\.?)?\s*\d{1,3}\s?%\b", repl, s, flags=re.IGNORECASE)
-
-    @classmethod
-    def _sanitize_text(cls, s: str) -> str:
-        s = cls._strip_stock_prefix(s or "")
-        s = cls._soften_extra_percentages(s)
-        # Tidy whitespace
-        s = re.sub(r"\s+\n", "\n", s)
-        s = re.sub(r"\n{3,}", "\n\n", s)
-        s = re.sub(r"[ \t]{2,}", " ", s)
-        return s.strip()
-
     def run_interviews_per_segment(self, max_turns: int = 20) -> List[Dict[str, Any]]:
         """
         Simulate interviews per segment for two archetypes: 'critical' and 'open_reflective'.
@@ -950,6 +896,100 @@ class ValidationCrew:
             merged.append(block)
         return merged
 
+    # ---------- small sanitizer (remove boilerplate & tame % overload) ----------
+    def _sanitize_text(self, s: str) -> str:
+        if not s:
+            return s
+        txt = str(s).strip()
+
+        # Remove boilerplate openers
+        patterns = [
+            r"^\s*i\s+now\s+can\s+give\s+(you\s+)?a\s+great\s+answer[:\-–—,.\s]*",
+            r"^\s*as\s+(an|a)\s+(ai|language\s+model)[^.!?]*[.!?]\s*",
+            r"^\s*(sure|certainly|of\s+course|honestly|to\s+answer\s+your\s+question)[,:\-–—\s]+",
+        ]
+        for pat in patterns:
+            txt = re.sub(pat, "", txt, flags=re.IGNORECASE).strip()
+
+        # Limit % signs: keep first %, convert others to "about N"
+        matches = list(re.finditer(r"(\b\d{1,3})\s?%", txt))
+        if len(matches) > 1:
+            # replace from second onward
+            # Do it left-to-right with an offset update
+            offset = 0
+            for m in matches[1:]:
+                start, end = m.start(0) + offset, m.end(0) + offset
+                num = m.group(1)
+                repl = f"about {num}"
+                txt = txt[:start] + repl + txt[end:]
+                offset += len(repl) - (end - start)
+
+        # Collapse excessive whitespace
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
+
+    # ---------- Anti-overlap helpers (NEW) ----------
+    @staticmethod
+    def _split_sentences(text: str) -> List[str]:
+        parts = re.split(r'(?<=[.!?])\s+', (text or "").strip())
+        return [p.strip() for p in parts if p and not p.isspace()]
+
+    @staticmethod
+    def _tok(s: str) -> List[str]:
+        return re.findall(r"[a-z0-9]+", (s or "").lower())
+
+    @staticmethod
+    def _jaccard(a: List[str], b: List[str]) -> float:
+        sa, sb = set(a), set(b)
+        if not sa or not sb:
+            return 0.0
+        return len(sa & sb) / len(sa | sb)
+
+    @staticmethod
+    def _key_terms_from_question(q: str, k: int = 2) -> List[str]:
+        stop = {
+            "the","a","an","and","or","but","if","when","how","what","why","where","which","who",
+            "to","for","with","without","on","in","of","at","by","about","from","is","are","do","does",
+            "this","that","these","those","it","its","be","been","being","as","into","over","under","up","down"
+        }
+        toks = [t for t in ValidationCrew._tok(q) if len(t) >= 4 and t not in stop]
+        seen, kept = set(), []
+        for t in toks:
+            if t not in seen:
+                seen.add(t); kept.append(t)
+            if len(kept) >= k:
+                break
+        return kept or (ValidationCrew._tok(q)[:1] or [])
+
+    def _deoverlap_and_align(self, answer: str, history: List[str], question: str) -> str:
+        """Drop near-duplicate sentences vs. earlier answers and make sure we reference the question."""
+        prev_sents: List[str] = []
+        for h in history[-6:]:
+            prev_sents.extend(self._split_sentences(h))
+        prev_norm = [self._tok(s) for s in prev_sents]
+
+        cand_sents = self._split_sentences(answer)
+
+        unique_sents: List[str] = []
+        for s in cand_sents:
+            tok_s = self._tok(s)
+            too_close_prev = any(self._jaccard(tok_s, ps) >= 0.80 for ps in prev_norm)
+            too_close_self = any(self._jaccard(tok_s, self._tok(u)) >= 0.85 for u in unique_sents)
+            if not too_close_prev and not too_close_self:
+                unique_sents.append(s)
+
+        if len(unique_sents) < 2 and cand_sents:
+            unique_sents = cand_sents[:2]
+
+        key = self._key_terms_from_question(question)
+        if key:
+            key_hit = any(any(k in self._tok(s) for k in key) for s in unique_sents)
+            if not key_hit and unique_sents:
+                unique_sents[0] = f"Regarding {', '.join(key)}: " + unique_sents[0].lstrip()
+
+        out = " ".join(unique_sents).strip()
+        return out or answer
+
     # ---------- intern ----------
     def _simulate_dialogue(
         self,
@@ -1010,11 +1050,13 @@ class ValidationCrew:
                 last = " ".join(history[-2:])
                 history_snippet = f"\n\nYour previous points (for consistency): {last}"
 
+            # --- Tight, anti-repetition prompt --------------------------------
             cust_desc = (
                 "You are the interviewee from the specified customer segment.\n"
                 "ANSWER FORMAT:\n"
                 f"- {ANSWER_MIN_SENTENCES} to {ANSWER_MAX_SENTENCES} full sentences in natural English.\n"
-                "- Include at least one brief, concrete anecdote (e.g., 'last week…' or 'for instance…').\n"
+                "- Make the answer SPECIFIC to the current question; mirror 1–2 key terms from the question.\n"
+                "- Include at least one brief, concrete anecdote, but DO NOT re-use the same anecdote/activity used earlier.\n"
                 "- Use numbers sparingly. At most ONE percentage per answer; prefer ranges or absolute units (€, minutes/week, #tools). If unsure, say 'roughly'.\n"
                 "- Anchor statements in the last 3–6 months when relevant (recency).\n"
                 "- Start directly with your point; do NOT begin with stock phrases like 'I now can give a great answer' or similar.\n"
@@ -1031,18 +1073,23 @@ class ValidationCrew:
             cust_task = _mk_task(cust_desc, "A short, credible answer (3–6 sentences).", customer)
             ans = str(self._run_single(cust_task)).strip()
             ans = self._sanitize_text(ans)
+            ans = self._deoverlap_and_align(ans, history, q)
 
             if ENABLE_MICRO_PROBE and (turns + 1 < max_turns):
-                probe = "Can you ground that in one concrete situation with a rough number (€, minutes/week, or times/week)? Avoid extra percentages."
+                probe = (
+                    "Can you ground that in one fresh, concrete situation with a rough number (€, minutes/week, or times/week)? "
+                    "Avoid repeating earlier examples or activities."
+                )
                 probe_desc = (
                     "You are still the interviewee. "
                     "Answer this follow-up in 2–3 sentences with one brief, concrete example. "
-                    "Use numbers sparingly; avoid more percentages.\n"
+                    "Use numbers sparingly; avoid more percentages and do not reuse the prior anecdote.\n"
                     f"Follow-up: {probe}"
                 )
                 probe_task = _mk_task(probe_desc, "A brief follow-up answer (2–3 sentences).", customer)
                 probe_ans = str(self._run_single(probe_task)).strip()
                 probe_ans = self._sanitize_text(probe_ans)
+                probe_ans = self._deoverlap_and_align(probe_ans, history + [ans], q)
                 ans = (ans + " " + probe_ans).strip()
 
             if facts:
@@ -1057,6 +1104,7 @@ class ValidationCrew:
                 )
                 chk_ans = str(self._run_single(chk_task)).strip()
                 chk_ans = self._sanitize_text(chk_ans)
+                chk_ans = self._deoverlap_and_align(chk_ans, history + [ans], q)
                 ans = (ans + " " + chk_ans).strip()
 
             transcript[-1]["answer"] = ans
@@ -1083,8 +1131,8 @@ class ValidationCrew:
             backstory = cust.get("backstory", "")
             response_style = cust.get("response_style", "")
             motivations = ", ".join(cust.get("motivations", []))
-            objections = ", ".join(cust.get("objections", []))          # FIX default []
-            dealbreakers = ", ".join(cust.get("dealbreakers", []))       # FIX default []
+            objections = ", ".join(cust.get("objections", []))
+            dealbreakers = ", ".join(cust.get("dealbreakers", []))
             return Agent(
                 role=role,
                 goal=goal,
@@ -1158,39 +1206,3 @@ class ValidationCrew:
                 pass
 
         return {}
-
-
-# ===== SAFETY PATCH: ensure _task_def exists on ValidationCrew ===============
-def __ensure__task_def__exists():
-    # Fallback implementation used if the method is missing (avoids AttributeError)
-    def _task_def_fallback(self, name: str) -> Dict[str, Any]:
-        """
-        Robust task lookup. If tasks.yaml is missing a name, return a soft fallback
-        so the run can continue instead of crashing.
-        """
-        try:
-            for t in (getattr(self, "tasks_spec", {}) or {}).get("tasks", []):
-                if (t.get("name") or "").strip() == name:
-                    return t
-        except Exception:
-            pass
-        # Soft fallback description to keep the pipeline running
-        return {
-            "name": name,
-            "description": (
-                f"[AUTO-FALLBACK for '{name}'] Return exactly ONE JSON object "
-                f"following the schema expected by the code. No markdown, no fences."
-            ),
-        }
-
-    try:
-        if not hasattr(ValidationCrew, "_task_def"):
-            ValidationCrew._task_def = _task_def_fallback  # type: ignore[attr-defined]
-    except Exception:
-        try:
-            ValidationCrew._task_def = _task_def_fallback  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-__ensure__task_def__exists()
-# ===== END SAFETY PATCH ======================================================
