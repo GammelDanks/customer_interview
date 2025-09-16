@@ -38,16 +38,28 @@ for k in ("MODEL_NAME","YOU_SEARCH_ENABLED","ANSWER_MIN_SENTENCES","ANSWER_MAX_S
     if k in st.secrets:
         os.environ[k] = str(st.secrets[k]).strip()
 
-# --- SQLite shim (fix für chromadb auf Streamlit Cloud) ----------------------
+# --- SQLite upgrade shim (force pysqlite3 if stdlib sqlite is too old) -------
+import sys as _sys
 try:
-    import sqlite3  # wenn das klappt, ist alles okay
+    import sqlite3 as _sqlite3
+    def _ver_tuple(v):
+        try:
+            return tuple(int(x) for x in str(v).split(".")[:3])
+        except Exception:
+            return (0, 0, 0)
+    if _ver_tuple(_sqlite3.sqlite_version) < (3, 35, 0):
+        import pysqlite3 as _pysqlite3
+        _sys.modules["sqlite3"] = _pysqlite3
+        _sys.modules["sqlite3.dbapi2"] = _pysqlite3.dbapi2
 except Exception:
+    # Fallback: always try to force pysqlite3
     try:
-        import pysqlite3
-        import sys as _sys
-        _sys.modules["sqlite3"] = _sys.modules["pysqlite3"]
+        import pysqlite3 as _pysqlite3
+        _sys.modules["sqlite3"] = _pysqlite3
+        _sys.modules["sqlite3.dbapi2"] = _pysqlite3.dbapi2
     except Exception:
         pass
+
 # -----------------------------------------------------------------------------
 
 # Basic env defaults
