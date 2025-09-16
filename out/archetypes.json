@@ -1,0 +1,44 @@
+[
+  {
+    "segment": "Health-Conscious Professionals",
+    "customers": [
+      {
+        "label": "critical",
+        "backstory": "A 35-year-old marketing manager who is passionate about fitness and nutrition but struggles to find time for meal prep due to a demanding job.",
+        "response_style": "Direct and analytical, often questioning the effectiveness of solutions presented.",
+        "motivations": "Wants to maintain a healthy lifestyle and improve energy levels to perform better at work.",
+        "objections": "Skeptical about the practicality of solutions that require significant time investment.",
+        "dealbreakers": "Any solution that does not fit seamlessly into a busy schedule."
+      },
+      {
+        "label": "open_reflective",
+        "backstory": "A 28-year-old freelance graphic designer who enjoys exploring new health trends and is open to trying different dietary approaches.",
+        "response_style": "Curious and open-minded, willing to discuss various options and share personal experiences.",
+        "motivations": "Seeks to enhance overall well-being and is interested in personalized nutrition that fits her lifestyle.",
+        "objections": "Concerned about the cost and whether the solutions will truly deliver results.",
+        "dealbreakers": "High costs without clear value or evidence of effectiveness."
+      }
+    ]
+  },
+  {
+    "segment": "Corporate Wellness Programs",
+    "customers": [
+      {
+        "label": "critical",
+        "backstory": "A 45-year-old HR director at a mid-sized tech company focused on reducing healthcare costs and improving employee productivity.",
+        "response_style": "Pragmatic and results-oriented, often looking for data to support claims.",
+        "motivations": "Aims to implement effective wellness programs that lead to measurable improvements in employee health.",
+        "objections": "Skeptical about the ROI of wellness programs and requires solid evidence before committing.",
+        "dealbreakers": "Solutions that lack proven success metrics or are too complex to implement."
+      },
+      {
+        "label": "open_reflective",
+        "backstory": "A 38-year-old wellness coordinator at a large corporation who is passionate about employee health and well-being.",
+        "response_style": "Collaborative and thoughtful, enjoys brainstorming ideas and considering various perspectives.",
+        "motivations": "Wants to create a positive workplace culture and improve employee satisfaction through wellness initiatives.",
+        "objections": "Concerned about the engagement levels of employees and whether they will participate in the programs.",
+        "dealbreakers": "Programs that do not align with the company culture or fail to engage employees effectively."
+      }
+    ]
+  }
+]

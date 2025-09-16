@@ -1,0 +1,329 @@
+version: 1
+tasks:
+  - name: identify_customer_segments
+    description: >-
+      Analysiere die Geschäftsidee und schlage umsetzbare Segmente vor (B2C/B2B-geeignete
+      Variablen). Jedes Segment mit: name, type, characteristics, needs_and_concerns,
+      pain_points, attitude, likelihood_to_adopt, buying_behavior, willingness_to_pay, differentiators.
+    inputs:
+      - { name: business_idea, type: string, required: true }
+      - { name: market_context, type: string, required: false }
+      - { name: constraints, type: array, items: string, required: false }
+    expected_output:
+      type: object
+      properties:
+        segments:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              type: { type: string, enum: ["B2C", "B2B"] }
+              characteristics: { type: array, items: { type: string } }
+              needs_and_concerns: { type: array, items: { type: string } }
+              pain_points: { type: array, items: { type: string } }
+              attitude: { type: string }
+              likelihood_to_adopt: { type: string }
+              buying_behavior: { type: array, items: { type: string } }
+              willingness_to_pay: { type: string }
+              differentiators: { type: array, items: { type: string } }
+        assumptions_and_risks: { type: array, items: { type: string } }
+
+  - name: propose_customer_archetypes
+    description: >-
+      Definiere pro Segment zwei Interview-Personas: (a) critical, (b) open_reflective,
+      jeweils mit backstory, response_style, motivations, objections, dealbreakers.
+    depends_on: [identify_customer_segments]
+    inputs:
+      - { name: segments, type: from_task, source: identify_customer_segments, path: segments, required: true }
+    expected_output:
+      type: object
+      properties:
+        archetypes:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              customers:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    label: { type: string, enum: ["critical", "open_reflective"] }
+                    role_name: { type: string }
+                    backstory: { type: string }
+                    response_style: { type: string }
+                    motivations: { type: array, items: { type: string } }
+                    objections: { type: array, items: { type: string } }
+                    dealbreakers: { type: array, items: { type: string } }
+
+  # NEU: Web-Evidenz in ein kurzes, nummeriertes Digest je Segment überführen
+  - name: digest_evidence
+    description: >-
+      Erzeuge aus segmentbezogenen Quellen (title, url) ein kompaktes Digest je Segment:
+      - references: nummerierte Liste [{id, title, url}]
+      - facts: 6–10 kurze, überprüfbare Aussagen, jede endet mit [ref N]
+      - implications: optionale kurze Stichpunkte für Interviews
+      Nur Fakten aufnehmen, die sich über den Linktitel plausibel verifizieren lassen.
+      Neutral, prägnant, auf Englisch formulieren.
+    inputs:
+      - { name: segments, type: array, required: true }
+      - { name: evidence_links_by_segment, type: object, required: true }
+    expected_output:
+      type: object
+      properties:
+        evidence_digest_by_segment:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              references:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    title: { type: string }
+                    url: { type: string }
+              facts:
+                type: array
+                items: { type: string }
+              implications:
+                type: array
+                items: { type: string }
+
+  - name: generate_interview_guidelines
+    description: >-
+      Erzeuge pro Segment 10–15 Fragen gemäß B2C/B2B-Typologien. Inklusive Pflichtfragen:
+      1) "What would your dream product do?"
+      2) "What are the key features, qualities, functionalities, effects that you expect and why?
+         What are the motivations and constraints behind those requests?"
+      Achte auf neutrale, nicht führende Formulierungen und prägnantes Englisch.
+    depends_on: [identify_customer_segments]
+    inputs:
+      - { name: business_idea, type: string, required: true }
+      - { name: segments, type: from_task, source: identify_customer_segments, path: segments, required: true }
+      - { name: interview_goal, type: string, required: false }
+      - { name: max_questions, type: integer, required: false, default: 15 }
+    expected_output:
+      type: object
+      properties:
+        business_type: { type: string, enum: ["B2C", "B2B"] }
+        segment_guidelines:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              questions: { type: array, items: { type: string } }
+        notes: { type: string }
+
+  # NEU: Leitfäden mit Evidenz anreichern, sodass mind. 50 % der Fragen [ref N] enthalten
+  - name: enrich_guidelines_with_evidence
+    description: >-
+      Überarbeite die aktuellen Leitfäden so, dass mindestens 50 % der Fragen pro Segment
+      explizit auf eine Aussage aus dem Evidence-Digest Bezug nehmen und mit [ref N] markieren.
+      Neutraler Ton, keine erfundenen Referenzen, max_questions nicht überschreiten.
+    inputs:
+      - { name: current_guidelines, type: array, required: true }
+      - { name: evidence_digest_by_segment, type: object, required: true }
+      - { name: max_questions, type: integer, required: false, default: 12 }
+    expected_output:
+      type: object
+      properties:
+        segment_guidelines:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              questions:
+                type: array
+                items: { type: string }
+
+  - name: review_guidelines_for_bias
+    description: >-
+      Optional: prüfe Leitfäden auf führende Formulierungen, doppelte Inhalte, unnötige PII
+      und schlage neutrale Alternativen vor.
+    optional: true
+    depends_on: [generate_interview_guidelines]
+    inputs:
+      - { name: segment_guidelines, type: from_task, source: generate_interview_guidelines, path: segment_guidelines, required: true }
+    expected_output:
+      type: object
+      properties:
+        issues_found: { type: array, items: { type: string } }
+        revised_guidelines:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              questions: { type: array, items: { type: string } }
+
+  - name: run_interviews_per_segment
+    description: >-
+      Führe pro Segment zwei Interviews (critical und open_reflective) mit je 1 Frage pro Turn
+      aus dem Leitfaden; kurze Nachfragen erlaubt. Frühes <END> zulässig.
+    depends_on: [generate_interview_guidelines, propose_customer_archetypes]
+    inputs:
+      - { name: segment_guidelines, type: from_task, source: generate_interview_guidelines, path: segment_guidelines, required: true }
+      - { name: archetypes, type: from_task, source: propose_customer_archetypes, path: archetypes, required: true }
+      - { name: max_turns, type: integer, required: false, default: 20 }
+      - { name: collect_metadata, type: boolean, required: false, default: true }
+    expected_output:
+      type: object
+      properties:
+        interviews:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              customer_label: { type: string, enum: ["critical", "open_reflective"] }
+              transcript:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    question: { type: string }
+                    answer: { type: string }
+              metadata:
+                type: object
+                properties:
+                  started_at: { type: string }
+                  ended_at: { type: string }
+                  notes: { type: string }
+
+  - name: synthesize_segment_findings
+    description: >-
+      Erzeuge je Segment strukturierte Findings inkl. pain_points, key_needs,
+      adoption_barriers_and_concerns (bevorzugt), buying_signals, repräsentative Zitate
+      und eine kurze Narrative. Für Abwärtskompatibilität spiegele die Inhalte zusätzlich in:
+        - constraints (praktische Hürden wie Budget, Zeit, Integration)
+        - risks_unknowns (wahrgenommene Risiken wie Privacy, Security, Reliability)
+      Falls du nur eine Liste führst, nutze primär "adoption_barriers_and_concerns" und
+      kopiere dieselben Punkte redundant in constraints/risks_unknowns.
+    depends_on: [run_interviews_per_segment]
+    inputs:
+      - { name: interviews, type: from_task, source: run_interviews_per_segment, path: interviews, required: true }
+    expected_output:
+      type: object
+      properties:
+        segment_summaries:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              pain_points: { type: array, items: { type: string } }
+              key_needs: { type: array, items: { type: string } }
+              adoption_barriers_and_concerns:
+                type: array
+                items: { type: string }
+                description: >-
+                  Practical and perceived hurdles that might prevent adoption of the solution,
+                  including constraints (budget, time, integration), perceived risks (privacy, security, reliability),
+                  and doubts about promises or overhyped claims.
+              constraints: { type: array, items: { type: string } }
+              risks_unknowns: { type: array, items: { type: string } }
+              buying_signals: { type: array, items: { type: string } }
+              representative_quotes: { type: array, items: { type: string } }
+              narrative: { type: string }
+
+  - name: cross_segment_comparison
+    description: >-
+      Vergleiche Segmente und priorisiere mit gewichtetem Score.
+    depends_on: [synthesize_segment_findings]
+    inputs:
+      - { name: segment_summaries, type: from_task, source: synthesize_segment_findings, path: segment_summaries, required: true }
+      - name: prioritization_weights
+        type: object
+        required: false
+        default:
+          severity: 1.0
+          frequency: 1.0
+          willingness_to_pay: 1.0
+          adoption_likelihood: 1.0
+          strategic_fit: 1.0
+    expected_output:
+      type: object
+      properties:
+        ranking:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              score: { type: number }
+              rationale: { type: string }
+        key_differences:
+          type: array
+          items:
+            type: object
+            properties:
+              dimension: { type: string }
+              observations: { type: array, items: { type: string } }
+        risks_and_unknowns: { type: array, items: { type: string } }
+
+  # Konkrete, testbare Anforderungen ableiten
+  - name: derive_product_requirements
+    description: >-
+      Leite aus den Segment-Findings konkrete, testbare Product Requirements ab.
+      Erzeuge sowohl cross-segment (global) als auch per Segment priorisierte Items.
+      Jedes Requirement enthält:
+        id (stabil), title, category (z. B. security|data|ux|performance|integration|compliance|operations|constraint|dont),
+        priority (MUST|SHOULD|COULD|WONT), must_have (bool), description,
+        acceptance_criteria (Given/When/Then-Checks), rationale (Bezug zu pains/needs),
+        depends_on (IDs), anti_requirements (explizit zu vermeidende Dinge),
+        effort_tshirt (XS|S|M|L|XL), tags.
+      Verweise auf Evidenz (Segment/Interview/Zitat) wo sinnvoll.
+    depends_on: [synthesize_segment_findings]
+    inputs:
+      - { name: segment_summaries, type: from_task, source: synthesize_segment_findings, path: segment_summaries, required: true }
+      - { name: interviews, type: from_task, source: run_interviews_per_segment, path: interviews, required: false }
+    expected_output:
+      type: object
+      properties:
+        cross_segment_requirements:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              title: { type: string }
+              category: { type: string }
+              priority: { type: string, enum: ["MUST","SHOULD","COULD","WONT"] }
+              must_have: { type: boolean }
+              description: { type: string }
+              acceptance_criteria: { type: array, items: { type: string } }
+              rationale: { type: string }
+              depends_on: { type: array, items: { type: string } }
+              anti_requirements: { type: array, items: { type: string } }
+              effort_tshirt: { type: string, enum: ["XS","S","M","L","XL"] }
+              tags: { type: array, items: { type: string } }
+        per_segment_requirements:
+          type: array
+          items:
+            type: object
+            properties:
+              segment: { type: string }
+              requirements:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    title: { type: string }
+                    category: { type: string }
+                    priority: { type: string, enum: ["MUST","SHOULD","COULD","WONT"] }
+                    must_have: { type: boolean }
+                    description: { type: string }
+                    acceptance_criteria: { type: array, items: { type: string } }
+                    rationale: { type: string }
+                    depends_on: { type: array, items: { type: string } }
+                    anti_requirements: { type: array, items: { type: string } }
+                    effort_tshirt: { type: string, enum: ["XS","S","M","L","XL"] }
+                    tags: { type: array, items: { type: string } }
+        notes: { type: string }

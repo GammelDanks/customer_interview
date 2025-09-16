@@ -1,0 +1,20 @@
+{
+  "ranking": [
+    {
+      "segment": "Health-Conscious Professionals",
+      "score": 4.5
+    },
+    {
+      "segment": "Corporate Wellness Programs",
+      "score": 4.4
+    }
+  ],
+  "key_differences": [
+    "Health-Conscious Professionals prioritize evidence-based solutions and simplicity, while Corporate Wellness Programs focus on measurable outcomes and customization.",
+    "Health-Conscious Professionals face skepticism towards fad diets, whereas Corporate Wellness Programs deal with skepticism about program effectiveness."
+  ],
+  "risks_and_unknowns": [
+    "Potential resistance from employees in Corporate Wellness Programs if customization is not adequately addressed.",
+    "Health-Conscious Professionals may struggle with time constraints despite willingness to invest in meal prep."
+  ]
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Health-Conscious Professionals",
+    "type": "B2C",
+    "needs_and_concerns": [
+      "personalized nutrition advice",
+      "time-efficient solutions",
+      "data privacy"
+    ],
+    "adoption_likelihood": "",
+    "willingness_to_pay": "medium to high",
+    "notes": ""
+  },
+  {
+    "name": "Corporate Wellness Programs",
+    "type": "B2B",
+    "needs_and_concerns": [
+      "improving employee health",
+      "reducing healthcare costs",
+      "enhancing productivity"
+    ],
+    "adoption_likelihood": "",
+    "willingness_to_pay": "high for proven results",
+    "notes": ""
+  }
+]
