@@ -574,6 +574,44 @@ class ValidationCrew:
         out = self._run_single(task)
         return self._safe_json(out)
 
+    # ---------- Postprocessor to clean boilerplate & tame percentages ----------
+    def _postprocess_customer_answer(self, s: str) -> str:
+        """Trim boilerplate openers and soften excessive % figures."""
+        import re
+        if not s:
+            return s
+        t = s.strip()
+
+        # Remove stereotypical boilerplate openings like:
+        # "I now can give a great answer", "I can now give a great answer",
+        # "Now I can give a great answer", "Here is/Here's a great answer", etc.
+        patterns = [
+            r'^\s*(?:I\s+now\s+can\s+give\s+a\s+great\s+answer[:.\-–—]?\s*)',
+            r'^\s*(?:I\s+can\s+now\s+give\s+a\s+great\s+answer[:.\-–—]?\s*)',
+            r'^\s*(?:Now\s+I\s+can\s+give\s+a\s+great\s+answer[:.\-–—]?\s*)',
+            r'^\s*(?:Here(?:\s+is|’s|\'s)?\s+a\s+great\s+answer[:.\-–—]?\s*)',
+            r'^\s*(?:Let\s+me\s+(?:provide|give)\s+a\s+great\s+answer[:.\-–—]?\s*)',
+        ]
+        for pat in patterns:
+            t = re.sub(pat, '', t, flags=re.IGNORECASE)
+
+        # If there are many percentages, keep at most two explicit ones;
+        # convert the rest into qualitative phrasing.
+        perc_hits = [m for m in re.finditer(r'\b(\d{1,3})\s?%', t)]
+        if len(perc_hits) > 2:
+            counter = {'i': 0}
+            def _keep_two_then_soften(m):
+                counter['i'] += 1
+                return m.group(0) if counter['i'] <= 2 else "a noticeable amount"
+            t = re.sub(r'\b(\d{1,3})\s?%', _keep_two_then_soften, t)
+
+        # Soften remaining percentages: "about 20%"
+        t = re.sub(r'\b(\d{1,3})\s?%', r'about \1%', t)
+
+        # Cleanup spacing
+        t = re.sub(r'\s{2,}', ' ', t).strip()
+        return t
+
     def run_interviews_per_segment(self, max_turns: int = 20) -> List[Dict[str, Any]]:
         """
         Simulate interviews per segment for two archetypes: 'critical' and 'open_reflective'.
@@ -960,9 +998,11 @@ class ValidationCrew:
                 "ANSWER FORMAT:\n"
                 f"- {ANSWER_MIN_SENTENCES} to {ANSWER_MAX_SENTENCES} full sentences in natural English.\n"
                 "- Include at least one brief, concrete anecdote (e.g., 'last week…' or 'for instance…').\n"
-                "- Include at least ONE concrete number if possible (€, %, minutes/week, times/week, or #tools).\n"
+                "- Include at least ONE concrete number if possible (€, minutes/week, times/week, or #tools). "
+                "Avoid exact percentages unless citing a measured statistic; otherwise use rough phrasing like 'about 20%' at most once.\n"
                 "- Anchor statements in the last 3–6 months when relevant (recency).\n"
-                "- No bullet points, no markdown, no note fragments.\n\n"
+                "- No bullet points, no markdown, no note fragments.\n"
+                "- Do not prepend boilerplate (e.g., 'I now can give a great answer.'). Start directly with the answer.\n\n"
                 f"Role/segment: {customer.role}\n"
                 f"Backstory: {getattr(customer, 'backstory', '')}\n"
                 f"Question: {q}\n"
@@ -974,16 +1014,18 @@ class ValidationCrew:
 
             cust_task = _mk_task(cust_desc, "A short, credible answer (3–6 sentences).", customer)
             ans = str(self._run_single(cust_task)).strip()
+            ans = self._postprocess_customer_answer(ans)
 
             if ENABLE_MICRO_PROBE and (turns + 1 < max_turns):
-                probe = "Can you ground that in one concrete situation with a rough number (€, %, minutes/week, or times/week)?"
+                probe = "Can you ground that in one concrete situation with a rough number (€, minutes/week, times/week, or #tools — avoid exact percentages unless measured)?"
                 probe_desc = (
                     "You are still the interviewee. "
-                    "Answer this follow-up in 2–3 sentences with one brief, concrete example and at least one number.\n"
+                    "Answer this follow-up in 2–3 sentences with one brief, concrete example and one rough number.\n"
                     f"Follow-up: {probe}"
                 )
                 probe_task = _mk_task(probe_desc, "A brief follow-up answer (2–3 sentences).", customer)
                 probe_ans = str(self._run_single(probe_task)).strip()
+                probe_ans = self._postprocess_customer_answer(probe_ans)
                 ans = (ans + " " + probe_ans).strip()
 
             if facts:
@@ -997,6 +1039,7 @@ class ValidationCrew:
                     customer,
                 )
                 chk_ans = str(self._run_single(chk_task)).strip()
+                chk_ans = self._postprocess_customer_answer(chk_ans)
                 ans = (ans + " " + chk_ans).strip()
 
             transcript[-1]["answer"] = ans
