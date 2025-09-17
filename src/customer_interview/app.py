@@ -76,14 +76,78 @@ os.environ.setdefault("ANSWER_MIN_SENTENCES", "3")
 os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
 
-# --- Hotfix: block chromadb import (crewai -> chromadb>=0.5 breaks) ----------
+# --- Hotfix: robust chromadb stub so crewai can import without the real package
+# Place this ABOVE any 'crewai' imports.
+def _install_chromadb_stub():
+    import sys as _sys, types as _types
+
+    # If any flavor of chromadb already loaded, do nothing
+    if "chromadb" in _sys.modules:
+        return
+
+    chroma = _types.ModuleType("chromadb")
+
+    # Type aliases that older chromadb exposed
+    chroma.Documents = list
+    chroma.Embeddings = list
+    chroma.IDs = list
+
+    # Minimal client + collection API used by some wrappers
+    class _Collection:
+        def __init__(self, *a, **k): pass
+        def add(self, *a, **k): return None
+        def upsert(self, *a, **k): return None
+        def get(self, *a, **k): return {}
+        def query(self, *a, **k): return {}
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def get_or_create_collection(self, *a, **k): return _Collection()
+
+    class _PersistentClient(_Client): pass
+    class _HttpClient(_Client): pass
+
+    chroma.Collection = _Collection
+    chroma.Client = _Client
+    chroma.PersistentClient = _PersistentClient
+    chroma.HttpClient = _HttpClient
+
+    # Submodule: chromadb.config (for chromadb.config.Settings)
+    cfg = _types.ModuleType("chromadb.config")
+    class Settings:
+        def __init__(self, *a, **k): pass
+    cfg.Settings = Settings
+
+    # Submodule: chromadb.utils.embedding_functions (for OpenAIEmbeddingFunction, etc.)
+    utils = _types.ModuleType("chromadb.utils")
+    embf = _types.ModuleType("chromadb.utils.embedding_functions")
+    class OpenAIEmbeddingFunction:
+        def __init__(self, *a, **k): pass
+        # If someone calls it, just return zero vectors (won't be used in your flow)
+        def __call__(self, texts): 
+            texts = texts or []
+            return [[0.0] * 1536 for _ in texts]
+    embf.OpenAIEmbeddingFunction = OpenAIEmbeddingFunction
+    utils.embedding_functions = embf
+
+    # Wire modules
+    chroma.config = cfg
+    chroma.utils = utils
+
+    # Register in sys.modules
+    _sys.modules["chromadb"] = chroma
+    _sys.modules["chromadb.config"] = cfg
+    _sys.modules["chromadb.utils"] = utils
+    _sys.modules["chromadb.utils.embedding_functions"] = embf
+
+# Install the stub unless explicitly disabled
+import os as _os
 try:
-    if os.getenv("DISABLE_CHROMADB", "1") == "1":
-        import types as _types, sys as _sys
-        if "chromadb" not in _sys.modules:
-            _sys.modules["chromadb"] = _types.ModuleType("chromadb")
+    if _os.getenv("DISABLE_CHROMADB", "1") == "1":
+        _install_chromadb_stub()
 except Exception:
     pass
+
 
 # -----------------------------------------------------------------------------
 # Crew import (case-robust)
