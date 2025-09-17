@@ -20,7 +20,7 @@ if SRC.exists() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 # -----------------------------------------------------------------------------
-// Load .env
+# Load .env
 # -----------------------------------------------------------------------------
 try:
     from dotenv import load_dotenv
