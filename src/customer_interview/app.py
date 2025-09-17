@@ -101,7 +101,7 @@ os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
 
 # -----------------------------------------------------------------------------
-// Crew import (case-robust)
+# Crew import (case-robust)
 # -----------------------------------------------------------------------------
 try:
     from .crew import ValidationCrew  # relative
