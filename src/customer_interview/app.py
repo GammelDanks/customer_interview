@@ -19,6 +19,12 @@ SRC = ROOT / "src"
 if SRC.exists() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+# --- Preflight: verify package folder exists ---------------------------------
+PKG_DIR = SRC / "customer_interview"
+if not PKG_DIR.exists():
+    st.error(f"Package folder not found: {PKG_DIR}")
+    st.stop()
+
 # -----------------------------------------------------------------------------
 # Load .env
 # -----------------------------------------------------------------------------
