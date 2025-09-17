@@ -152,13 +152,8 @@ except Exception:
 # -----------------------------------------------------------------------------
 # Crew import (case-robust)
 # -----------------------------------------------------------------------------
-try:
-    from .crew import ValidationCrew  # relative
-except Exception:
-    try:
-        from CustomerInterview.crew import ValidationCrew  # absolute (capitalized)
-    except Exception:
-        from customer_interview.crew import ValidationCrew  # absolute (lowercase, fallback)
+from customer_interview.crew import ValidationCrew
+
 
 # --- NEW: web search provider (lazy import, case-robust) ---------------------
 def _get_search():
