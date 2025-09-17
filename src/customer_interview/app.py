@@ -76,6 +76,15 @@ os.environ.setdefault("ANSWER_MIN_SENTENCES", "3")
 os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
 
+# --- Hotfix: block chromadb import (crewai -> chromadb>=0.5 breaks) ----------
+try:
+    if os.getenv("DISABLE_CHROMADB", "1") == "1":
+        import types as _types, sys as _sys
+        if "chromadb" not in _sys.modules:
+            _sys.modules["chromadb"] = _types.ModuleType("chromadb")
+except Exception:
+    pass
+
 # -----------------------------------------------------------------------------
 # Crew import (case-robust)
 # -----------------------------------------------------------------------------
