@@ -3,9 +3,9 @@ import os
 import re
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 from pathlib import Path
-from urllib.parse import urlparse  # NEW
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, LLM
@@ -14,13 +14,11 @@ import yaml
 # --- Load ENV cleanly (no project/org needed) ---------------------------------
 load_dotenv(override=True)
 
-_api_key = os.getenv("OPENAI_API_KEY", "")
-_api_key = _api_key.strip() if _api_key else ""
+_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
 os.environ["OPENAI_API_KEY"] = _api_key
 print("OPENAI_API_KEY loaded:", bool(_api_key), "| length:", len(_api_key), "| tail:", _api_key[-6:])
 
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-
 PKG_DIR = Path(__file__).resolve().parent
 
 
@@ -80,7 +78,8 @@ DEBUG_CREW = os.getenv("DEBUG_CREW", "0") == "1"
 # Answer “dials” from .env
 ANSWER_MIN_SENTENCES = int(os.getenv("ANSWER_MIN_SENTENCES", "3"))
 ANSWER_MAX_SENTENCES = int(os.getenv("ANSWER_MAX_SENTENCES", "6"))
-ENABLE_MICRO_PROBE = os.getenv("ENABLE_MICRO_PROBE", "1") == "1"
+# WICHTIG: Standardmäßig Micro-Probe aus → weniger Redundanz
+ENABLE_MICRO_PROBE = os.getenv("ENABLE_MICRO_PROBE", "0") == "1"
 
 # English question banks (fallbacks)
 B2C_QUESTION_BANK = [
@@ -111,8 +110,8 @@ class ValidationCrew:
       - Interview guidelines
       - (optional) Bias review
       - Simulated interviews (interviewer + customer archetypes)
-      - Segment synthesis (robust, with representative quotes)
-      - Product requirements derivation (cross-segment + per-segment)
+      - Segment synthesis
+      - Product requirements derivation
     """
 
     def __init__(
@@ -140,8 +139,8 @@ class ValidationCrew:
         self.segment_guidelines: List[Dict[str, Any]] = []
         self.interviews: List[Dict[str, Any]] = []
         self.segment_summaries: List[Dict[str, Any]] = []
-        self.product_requirements: Dict[str, Any] = {}  # NEW cache
-        self.comparison: Dict[str, Any] = {}  # kept for backward compatibility (now unused)
+        self.product_requirements: Dict[str, Any] = {}
+        self.comparison: Dict[str, Any] = {}
 
     # ---------- Init ----------
     def _init_fixed_agents(self):
@@ -175,32 +174,16 @@ class ValidationCrew:
         return out
 
     def _fallback_segments(self, business_idea: str) -> List[Dict[str, Any]]:
-        # English defaults
         return [
-            {
-                "name": "Early adopters",
-                "type": "B2C",
-                "needs_and_concerns": ["Quick results", "Low setup effort"],
-                "adoption_likelihood": "high",
-                "willingness_to_pay": "medium",
-                "notes": business_idea,
-            },
-            {
-                "name": "Price-sensitive users",
-                "type": "B2C",
-                "needs_and_concerns": ["Cost control", "Transparency"],
-                "adoption_likelihood": "medium",
-                "willingness_to_pay": "low",
-                "notes": business_idea,
-            },
-            {
-                "name": "Quality-focused users",
-                "type": "B2C",
-                "needs_and_concerns": ["Reliability", "Support"],
-                "adoption_likelihood": "medium",
-                "willingness_to_pay": "high",
-                "notes": business_idea,
-            },
+            {"name": "Early adopters", "type": "B2C",
+             "needs_and_concerns": ["Quick results", "Low setup effort"],
+             "adoption_likelihood": "high", "willingness_to_pay": "medium", "notes": business_idea},
+            {"name": "Price-sensitive users", "type": "B2C",
+             "needs_and_concerns": ["Cost control", "Transparency"],
+             "adoption_likelihood": "medium", "willingness_to_pay": "low", "notes": business_idea},
+            {"name": "Quality-focused users", "type": "B2C",
+             "needs_and_concerns": ["Reliability", "Support"],
+             "adoption_likelihood": "medium", "willingness_to_pay": "high", "notes": business_idea},
         ]
 
     def _normalize_archetypes(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -214,9 +197,7 @@ class ValidationCrew:
                 for idx, c in enumerate(customers):
                     if not isinstance(c, dict):
                         continue
-                    label = c.get("label")
-                    if not label:
-                        label = "critical" if idx == 0 else ("open_reflective" if idx == 1 else "critical")
+                    label = c.get("label") or ("critical" if idx == 0 else "open_reflective")
                     cc.append({
                         "label": label,
                         "backstory": c.get("backstory", ""),
@@ -277,11 +258,6 @@ class ValidationCrew:
 
     # ---------- Evidence: digest + evidence-anchored guidelines ----------
     def digest_evidence(self) -> dict:
-        """
-        Create a concise, numbered digest per segment from self.evidence_by_segment.
-        Uses 'evidence_analyst' agent and 'digest_evidence' task if available;
-        otherwise falls back to a simple map of links.
-        """
         if not hasattr(self, "evidence_by_segment"):
             self.evidence_by_segment = {}
 
@@ -316,12 +292,7 @@ class ValidationCrew:
         self.evidence_digest_by_segment = digest
         return self.evidence_digest_by_segment
 
-    def enrich_guidelines_with_evidence(self, guidelines: list[dict], max_questions: int = 12) -> list[dict]:
-        """
-        Rewrite/augment segment questions so >=50% explicitly reference a fact using [ref N].
-        Uses 'enrich_guidelines_with_evidence' task with the interview_designer agent.
-        Falls back to a light in-code rewriter if task/agent is unavailable.
-        """
+    def enrich_guidelines_with_evidence(self, guidelines: List[Dict[str, Any]], max_questions: int = 12) -> List[Dict[str, Any]]:
         if not hasattr(self, "evidence_digest_by_segment"):
             self.evidence_digest_by_segment = {}
 
@@ -356,7 +327,6 @@ class ValidationCrew:
             if not qs or not facts:
                 by_seg.setdefault(seg, qs)
                 continue
-            # weave facts into first half of questions
             half = max(1, min(len(qs) // 2, len(facts)))
             new_qs = []
             for i, q in enumerate(qs):
@@ -540,7 +510,6 @@ class ValidationCrew:
                     return "B2B"
                 return "B2C"
 
-            # Build fallback guidelines if still missing
             normalized = []
             for seg in self.segments:
                 segname = seg.get("name", "Segment")
@@ -575,65 +544,358 @@ class ValidationCrew:
         out = self._run_single(task)
         return self._safe_json(out)
 
-    # ---------- Sanitizer helpers (prefix & percentages) ----------
+    # ---------- Sanitizer & anti-repeat helpers ----------
     @staticmethod
     def _strip_stock_prefix(s: str) -> str:
-        """Remove common boilerplate like 'I now can give (you) a great answer' at start."""
         if not s:
             return s
         patterns = [
             r"^\s*i\s+now\s+can\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
             r"^\s*now\s+i\s+can\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
             r"^\s*i\s+can\s+now\s+give\s+(?:you\s+)?a\s+great\s+answer[:,.!]?\s*",
+            r"^\s*(sure|certainly|of\s+course|honestly|to\s+answer\s+your\s+question)[,:\-–—\s]+",
         ]
         out = s
         for p in patterns:
             out = re.sub(p, "", out, flags=re.IGNORECASE)
-        # Also strip stray leading quotes/backticks
-        out = re.sub(r"^\s*[`'\"]\s*", "", out)
-        return out.lstrip()
+        return re.sub(r"^\s*[`'\"]\s*", "", out).lstrip()
 
     @staticmethod
     def _soften_extra_percentages(s: str) -> str:
-        """
-        Keep at most the first numeric percentage as-is; convert subsequent % mentions
-        into qualitative phrases to avoid mechanical feel.
-        """
         if not s or "%" not in s:
             return s
-
         descriptors = ["a small amount", "a moderate amount", "a noticeable amount", "a significant amount"]
-        idx = {"count": 0}
-
+        idx = {"c": 0}
         def repl(m: re.Match) -> str:
-            val = m.group(0)
-            idx["count"] += 1
-            if idx["count"] == 1:
-                return val  # keep the first numeric %
-            # replace subsequent with a descriptor (no number)
-            d = descriptors[(idx["count"] - 2) % len(descriptors)]
-            # preserve surrounding spacing/punctuation
-            # Replace the whole token with 'a moderate amount'
-            return d
-
-        # Replace tokens like '15%' or '15 %' or 'about 20%'
+            idx["c"] += 1
+            return m.group(0) if idx["c"] == 1 else descriptors[(idx["c"] - 2) % len(descriptors)]
         return re.sub(r"\b(?:about|around|approx\.?)?\s*\d{1,3}\s?%\b", repl, s, flags=re.IGNORECASE)
+
+    @staticmethod
+    def _split_sentences(text: str) -> List[str]:
+        parts = re.split(r'(?<=[.!?])\s+', (text or "").strip())
+        return [p.strip() for p in parts if p and not p.isspace()]
+
+    @staticmethod
+    def _tok(s: str) -> List[str]:
+        return re.findall(r"[a-z0-9]+", (s or "").lower())
+
+    @staticmethod
+    def _jaccard(a: List[str], b: List[str]) -> float:
+        sa, sb = set(a), set(b)
+        if not sa or not sb:
+            return 0.0
+        return len(sa & sb) / max(1, len(sa | sb))
+
+    @staticmethod
+    def _key_terms_from_question(q: str, k: int = 2) -> List[str]:
+        stop = {"the","a","an","and","or","but","if","when","how","what","why","where","which","who",
+                "to","for","with","without","on","in","of","at","by","about","from","is","are","do","does",
+                "this","that","these","those","it","its","be","been","being","as","into","over","under","up","down"}
+        toks = [t for t in ValidationCrew._tok(q) if len(t) >= 4 and t not in stop]
+        seen, kept = set(), []
+        for t in toks:
+            if t not in seen:
+                seen.add(t); kept.append(t)
+            if len(kept) >= k:
+                break
+        return kept or (ValidationCrew._tok(q)[:1] or [])
+
+    @staticmethod
+    def _extract_topics(answer: str) -> Set[str]:
+        a = (answer or "").lower()
+        topics: Set[str] = set()
+        # typische Wiederholungsmuster
+        for m in re.findall(r"\b\d{1,2}\s*minutes?\s*(of\s+)?(meditation|mindfulness|yoga|breath\w*)\b", a):
+            topics.add("minutes+mindfulness")
+            topics.add("mindfulness")
+        for w in ["meditation", "mindfulness", "yoga", "breathing", "breathwork", "journaling", "meal prep"]:
+            if w in a:
+                topics.add(w)
+        # einfache Bigramme
+        toks = [t for t in re.findall(r"[a-z0-9]+", a) if len(t) >= 3]
+        for i in range(len(toks) - 1):
+            topics.add(f"{toks[i]} {toks[i+1]}")
+        return topics
 
     @classmethod
     def _sanitize_text(cls, s: str) -> str:
         s = cls._strip_stock_prefix(s or "")
         s = cls._soften_extra_percentages(s)
-        # Tidy whitespace
         s = re.sub(r"\s+\n", "\n", s)
         s = re.sub(r"\n{3,}", "\n\n", s)
         s = re.sub(r"[ \t]{2,}", " ", s)
         return s.strip()
 
+    def _deoverlap_and_align(self, answer: str, history: List[str], question: str) -> str:
+        prev_sents: List[str] = []
+        for h in history[-6:]:
+            prev_sents.extend(self._split_sentences(h))
+        prev_norm = [self._tok(s) for s in prev_sents]
+
+        cand_sents = self._split_sentences(answer)
+        unique_sents: List[str] = []
+        for s in cand_sents:
+            tok_s = self._tok(s)
+            too_close_prev = any(self._jaccard(tok_s, ps) >= 0.78 for ps in prev_norm)
+            too_close_self = any(self._jaccard(tok_s, self._tok(u)) >= 0.83 for u in unique_sents)
+            if not too_close_prev and not too_close_self:
+                unique_sents.append(s)
+
+        if not unique_sents and cand_sents:
+            unique_sents = cand_sents[:1]
+
+        # Fragebezug sicherstellen
+        key = self._key_terms_from_question(question)
+        if key:
+            key_hit = any(any(k in self._tok(s) for k in key) for s in unique_sents)
+            if not key_hit and unique_sents:
+                unique_sents[0] = f"Regarding {', '.join(key)}: " + unique_sents[0].lstrip()
+
+        return " ".join(unique_sents).strip() or answer
+
+    # ---------- convenience for UI (optional) ----------
+    def segments_with_archetypes(self) -> List[Dict[str, Any]]:
+        by_seg = {a["segment"]: a.get("customers", []) for a in self.archetypes}
+        merged = []
+        for s in self.segments:
+            segname = s.get("name")
+            block = dict(s)
+            block["archetypes"] = by_seg.get(segname, [])
+            merged.append(block)
+        return merged
+
+    # ---------- intern ----------
+    def _simulate_dialogue(
+        self,
+        interviewer: Agent,
+        customer: Agent,
+        questions: List[str],
+        max_turns: int = 20,
+        segment_name: Optional[str] = None,  # for evidence hint & brands
+    ) -> List[Dict[str, str]]:
+        transcript: List[Dict[str, str]] = []
+        turns = 0
+        history: List[str] = []  # keep last answers for consistency
+        banlist: Set[str] = set()  # Themen/Patterns, die wir nicht wiederholen
+
+        for q in questions:
+            if turns >= max_turns:
+                break
+            transcript.append({"question": q, "answer": ""})
+
+            # Mini-evidence hint (max 2 facts) + simple brand extraction from references
+            facts: List[str] = []
+            brands: List[str] = []
+            try:
+                digest = getattr(self, "evidence_digest_by_segment", {}) or {}
+                if segment_name and segment_name in digest:
+                    facts = list(digest[segment_name].get("facts") or [])[:2]
+                    refs = list(digest[segment_name].get("references") or [])[:6]
+                    seen = set()
+                    for r in refs:
+                        u = (r.get("url") or "").strip()
+                        host = urlparse(u).netloc.lower().replace("www.", "")
+                        if not host:
+                            continue
+                        parts = host.split(".")
+                        brand = parts[-2] if len(parts) >= 2 else host
+                        if brand and brand not in seen and brand.isalpha():
+                            seen.add(brand)
+                            brands.append(brand)
+                        if len(brands) >= 3:
+                            break
+            except Exception:
+                pass
+
+            evidence_hint = ""
+            if facts:
+                evidence_hint = (
+                    "\n\n(Background trends you might have casually heard about; do NOT sound like an expert — "
+                    "reflect them only if it feels natural: " + " | ".join(facts) + ")"
+                )
+            brand_hint = ""
+            if brands:
+                brand_hint = (
+                    "\n\n(If relevant, you may mention tools/services you've seen/used, e.g.: "
+                    + ", ".join(brands) + "; only if it genuinely fits your experience.)"
+                )
+
+            history_snippet = ""
+            if history:
+                last = " ".join(history[-2:])
+                history_snippet = f"\n\nYour previous points (for consistency): {last}"
+
+            forbidden_clause = ""
+            if banlist:
+                forbidden_clause = (
+                    "\n\nDO NOT mention or allude to ANY of these earlier topics: "
+                    + ", ".join(sorted(list(banlist)))[:900]
+                    + ". If the question is about one of them, take a clearly different angle (new metric/time window/activity)."
+                )
+
+            cust_desc = (
+                "You are the interviewee from the specified customer segment.\n"
+                "ANSWER FORMAT:\n"
+                f"- {ANSWER_MIN_SENTENCES} to {ANSWER_MAX_SENTENCES} full sentences in natural English.\n"
+                "- Make the answer SPECIFIC to the current question; mirror 1–2 key terms from the question.\n"
+                "- Include at least one brief, concrete anecdote, but do NOT reuse earlier anecdotes/activities.\n"
+                "- Numbers: at most one percentage; prefer absolute units (€, minutes/week, #tools). If unsure, say 'roughly'.\n"
+                "- Anchor statements in the last 3–6 months when relevant (recency).\n"
+                "- Start directly; no boilerplate like 'I now can give a great answer'.\n"
+                "- No bullet points.\n\n"
+                f"Role/segment: {customer.role}\n"
+                f"Backstory: {getattr(customer, 'backstory', '')}\n"
+                f"Question: {q}\n"
+                "Answer realistically and consistently with backstory/response style, motivations, objections, and dealbreakers."
+                + history_snippet
+                + evidence_hint
+                + brand_hint
+                + forbidden_clause
+            )
+
+            cust_task = _mk_task(cust_desc, "A short, credible answer (3–6 sentences).", customer)
+            ans = str(self._run_single(cust_task)).strip()
+            ans = self._sanitize_text(ans)
+            ans = self._deoverlap_and_align(ans, history, q)
+
+            if ENABLE_MICRO_PROBE and (turns + 1 < max_turns):
+                probe = (
+                    "Can you ground that in one fresh, concrete situation with a rough number (€, minutes/week, or times/week)? "
+                    "Avoid repeating earlier examples or activities."
+                )
+                probe_desc = (
+                    "You are still the interviewee. "
+                    "Answer this follow-up in 2–3 sentences with one brief, concrete example. "
+                    "Use numbers sparingly; avoid more percentages and do not reuse prior anecdotes.\n"
+                    f"Follow-up: {probe}"
+                )
+                probe_task = _mk_task(probe_desc, "A brief follow-up answer (2–3 sentences).", customer)
+                probe_ans = str(self._run_single(probe_task)).strip()
+                probe_ans = self._sanitize_text(probe_ans)
+                probe_ans = self._deoverlap_and_align(probe_ans, history + [ans], q)
+                ans = (ans + " " + probe_ans).strip()
+
+            if facts:
+                chk = (
+                    "If you think about it: does any of this resonate with things you've seen/heard recently? "
+                    "Feel free to say 'not sure' if it doesn't."
+                )
+                chk_task = _mk_task(
+                    "You are still the interviewee. In ONE short sentence, react casually to this prompt: " + chk,
+                    "One casual sentence.",
+                    customer,
+                )
+                chk_ans = str(self._run_single(chk_task)).strip()
+                chk_ans = self._sanitize_text(chk_ans)
+                chk_ans = self._deoverlap_and_align(chk_ans, history + [ans], q)
+                ans = (ans + " " + chk_ans).strip()
+
+            transcript[-1]["answer"] = ans
+            history.append(ans)
+
+            # banlist updaten, um Wiederholungen (z.B. 15 Min. Meditation) zu vermeiden
+            banlist |= self._extract_topics(ans)
+
+            turns += 1
+
+        return transcript
+
+    def _instantiate_customer_agents(self, archetypes: List[Dict[str, Any]]):
+        t_crit = next(
+            (t for t in self.customer_templates if t.get("template_name") == "customer_critical_template"),
+            None,
+        )
+        t_open = next(
+            (t for t in self.customer_templates if t.get("template_name") == "customer_open_reflective_template"),
+            None,
+        )
+
+        def build_from_tpl(tpl: Dict[str, Any], seg_name: str, cust: Dict[str, Any]) -> Agent:
+            seg_slug = seg_name.lower().replace(" ", "_")
+            role = tpl.get("role", "").replace("{{segment_name}}", seg_name)
+            goal = tpl.get("goal", "").replace("{{segment_name}}", seg_name)
+            _ = tpl.get("name", "customer").replace("{{segment_slug}}", seg_slug)
+            backstory = cust.get("backstory", "")
+            response_style = cust.get("response_style", "")
+            motivations = ", ".join(cust.get("motivations", []))
+            objections = ", ".join(cust.get("objections", []))
+            dealbreakers = ", ".join(cust.get("dealbreakers", []))
+            return Agent(
+                role=role,
+                goal=goal,
+                backstory=(
+                    f"{backstory}\n\n"
+                    f"Response style: {response_style}\n"
+                    f"Motivations: {motivations}\n"
+                    f"Objections: {objections}\n"
+                    f"Dealbreakers: {dealbreakers}\n"
+                ),
+                allow_delegation=False,
+                verbose=False,
+                llm=LLM(model=os.getenv("MODEL_NAME", "gpt-4o-mini"), temperature=0.5, max_tokens=300),
+            )
+
+        for block in archetypes:
+            seg = block.get("segment")
+            customers = block.get("customers", [])
+            for idx, cust in enumerate(customers):
+                label = cust.get("label") or ("critical" if idx == 0 else "open_reflective")
+                if label == "critical" and t_crit:
+                    self.customer_agents[(seg, "critical")] = build_from_tpl(t_crit, seg, cust)
+                elif label == "open_reflective" and t_open:
+                    self.customer_agents[(seg, "open_reflective")] = build_from_tpl(t_open, seg, cust)
+
+    def _task_def(self, name: str) -> Dict[str, Any]:
+        for t in self.tasks_spec.get("tasks", []):
+            if (t.get("name") or "").strip() == name:
+                return t
+        raise KeyError(f"Task '{name}' not found in {self.tasks_path}.")
+
+    def _run_single(self, task: Task) -> Any:
+        crew = Crew(agents=[task.agent], tasks=[task], process="sequential")
+        out = crew.kickoff()
+        if DEBUG_CREW:
+            print("\n" + "=" * 60)
+            print(f"[DEBUG_CREW] RAW OUTPUT for task ({task.agent.role}):")
+            try:
+                s = str(out)
+                print(s[:2000] + ("..." if len(s) > 2000 else ""))
+            except Exception:
+                print(repr(out))
+            print("=" * 60 + "\n")
+        return out
+
+    def _safe_json(self, text_out: Any) -> Dict[str, Any]:
+        s = str(text_out).strip()
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+
+        if "```" in s:
+            parts = s.split("```")
+            for p in parts:
+                p = p.strip()
+                if p.startswith("{") and p.endswith("}"):
+                    try:
+                        return json.loads(p)
+                    except Exception:
+                        pass
+
+        first = s.find("{")
+        last = s.rfind("}")
+        if first != -1 and last != -1 and last > first:
+            candidate = s[first:last + 1]
+            try:
+                return json.loads(candidate)
+            except Exception:
+                pass
+
+        return {}
+
+    # ---------- Public API ----------
     def run_interviews_per_segment(self, max_turns: int = 20) -> List[Dict[str, Any]]:
-        """
-        Simulate interviews per segment for two archetypes: 'critical' and 'open_reflective'.
-        Returns a list of dicts with keys: segment, customer_label, transcript, metadata.
-        """
         interviewer = self.agents.get("interviewer")
         if interviewer is None:
             raise RuntimeError("Interviewer agent not found. Check agents.yaml (name: interviewer).")
@@ -694,12 +956,8 @@ class ValidationCrew:
         self.interviews = results
         return self.interviews
 
-    # ---------- Synthesis helpers (new & robust) ----------
+    # ---------- Synthesis helpers ----------
     def _validate_and_fill_summaries(self, summaries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Ensure every segment summary has the required keys and is not empty.
-        If items are missing/empty, fill them with minimal but useful defaults.
-        """
         required_arrays = ["pain_points", "key_needs", "constraints", "buying_signals", "risks_unknowns"]
         out = []
         known_segments = {s.get("name") for s in self.segments}
@@ -726,11 +984,6 @@ class ValidationCrew:
         return out
 
     def _fallback_summaries_from_interviews(self) -> List[Dict[str, Any]]:
-        """
-        Last-resort fallback: build very simple summaries from the transcripts.
-        We won't infer semantics; we take a few answers as 'quotes'
-        and populate categories with safe placeholders.
-        """
         by_seg: Dict[str, List[str]] = {}
         for rec in self.interviews or []:
             seg = rec.get("segment", "Segment")
@@ -759,7 +1012,6 @@ class ValidationCrew:
         analyst = self.agents["analyst"]
         tdef = self._task_def("synthesize_segment_findings")
 
-        # Strong English + hard JSON schema & no-empty rule
         description = (
             "IMPORTANT: Produce the output in ENGLISH only. Do NOT use any German.\n\n"
             f"{tdef['description']}\n\n"
@@ -767,16 +1019,8 @@ class ValidationCrew:
             "Schema:\n"
             "{\n"
             '  "segment_summaries": [\n'
-            '    {\n'
-            '      "segment": "<name>",\n'
-            '      "pain_points": [str, ...],\n'
-            '      "key_needs": [str, ...],\n'
-            '      "constraints": [str, ...],\n'
-            '      "buying_signals": [str, ...],\n'
-            '      "risks_unknowns": [str, ...],\n'
-            '      "representative_quotes": [str, ...],\n'
-            '      "narrative": "short paragraph"\n'
-            "    }, ...\n"
+            '    {"segment":"<name>","pain_points":[str,...],"key_needs":[str,...],"constraints":[str,...],'
+            '"buying_signals":[str,...],"risks_unknowns":[str,...],"representative_quotes":[str,...],"narrative":"short paragraph"}\n'
             "  ]\n"
             "}\n"
             "- Do NOT leave arrays empty. If you are uncertain, add a cautious, concise item.\n\n"
@@ -790,7 +1034,6 @@ class ValidationCrew:
         data = self._safe_json(out)
         summaries = data.get("segment_summaries") or []
 
-        # Retry once if empty
         if not summaries:
             retry_desc = (
                 "IMPORTANT: ENGLISH ONLY. Do NOT leave arrays empty. "
@@ -802,27 +1045,22 @@ class ValidationCrew:
             data2 = self._safe_json(out2)
             summaries = data2.get("segment_summaries") or []
 
-        # Fallback if still empty → simple build from interviews
         if not summaries:
             summaries = self._fallback_summaries_from_interviews()
 
-        # Ensure required keys & no blanks
         summaries = self._validate_and_fill_summaries(summaries)
-
         self.segment_summaries = summaries
         return self.segment_summaries
 
     # ---------- NEW: Product requirements derivation ----------
     def _req_item_defaults(self, r: Dict[str, Any], idx: int) -> Dict[str, Any]:
-        """Coerce fields and set safe defaults."""
         def _listify(x):
             if x is None:
                 return []
             if isinstance(x, list):
                 return [str(i) for i in x if i is not None]
             return [str(x)]
-
-        out = {
+        return {
             "id": r.get("id") or f"REQ-{idx:03d}",
             "title": r.get("title") or r.get("name") or "Unspecified requirement",
             "category": r.get("category") or "unspecified",
@@ -833,7 +1071,6 @@ class ValidationCrew:
             "depends_on": _listify(r.get("depends_on")),
             "anti_requirements": _listify(r.get("anti_requirements") or r.get("anti_req")),
         }
-        return out
 
     def _normalize_requirements(self, data: Dict[str, Any]) -> Dict[str, Any]:
         cross = data.get("cross_segment_requirements") or data.get("cross_requirements") or []
@@ -863,15 +1100,6 @@ class ValidationCrew:
         }
 
     def derive_product_requirements(self) -> Dict[str, Any]:
-        """
-        NEW: Turn interview syntheses into concrete product requirements.
-        Output shape:
-        {
-          "cross_segment_requirements": [ {id, title, category, priority, must_have, acceptance_criteria[], rationale, depends_on[], anti_requirements[]} ],
-          "per_segment_requirements": [ {segment, requirements: [ ...same item schema... ]} ]
-        }
-        """
-        # Prefer a dedicated product owner agent if present
         product_owner = (
             self.agents.get("product_owner")
             or self.agents.get("strategist")
@@ -880,7 +1108,7 @@ class ValidationCrew:
         if product_owner is None:
             raise RuntimeError("No suitable agent found (product_owner/strategist/analyst). Check agents.yaml.")
 
-        tdef = self._task_def("derive_product_requirements")  # relies on tasks.yaml entry
+        tdef = self._task_def("derive_product_requirements")
 
         description = (
             EN_GUARD
@@ -910,271 +1138,33 @@ class ValidationCrew:
         data = self._safe_json(out)
         norm = self._normalize_requirements(data)
 
-        # Minimal fallback if model returned nothing
         if not norm["cross_segment_requirements"] and not norm["per_segment_requirements"]:
-            # Build a very small skeleton from summaries
             skeleton_cross: List[Dict[str, Any]] = []
             idx = 1
             for s in self.segment_summaries or []:
                 for need in (s.get("key_needs") or []):
                     skeleton_cross.append(self._req_item_defaults({"title": f"Satisfy need: {need}", "category": "functional", "priority": "should"}, idx))
                     idx += 1
-            norm = {
-                "cross_segment_requirements": skeleton_cross[:5],
-                "per_segment_requirements": [],
-            }
+            norm = {"cross_segment_requirements": skeleton_cross[:5], "per_segment_requirements": []}
 
         self.product_requirements = norm
         return self.product_requirements
 
     # ---------- Comparison (deprecated / no-op) ----------
     def cross_segment_comparison(self, weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-        """
-        Deprecated: no longer used. Kept for backward compatibility.
-        """
         self.comparison = {}
         return self.comparison
-
-    # ---------- convenience for UI (optional) ----------
-    def segments_with_archetypes(self) -> List[Dict[str, Any]]:
-        """
-        Utility to merge archetypes into segments for nicer UI rendering.
-        Does not change pipeline behavior.
-        """
-        by_seg = {a["segment"]: a.get("customers", []) for a in self.archetypes}
-        merged = []
-        for s in self.segments:
-            segname = s.get("name")
-            block = dict(s)
-            block["archetypes"] = by_seg.get(segname, [])
-            merged.append(block)
-        return merged
-
-    # ---------- intern ----------
-    def _simulate_dialogue(
-        self,
-        interviewer: Agent,
-        customer: Agent,
-        questions: List[str],
-        max_turns: int = 20,
-        segment_name: Optional[str] = None,  # for evidence hint & brands
-    ) -> List[Dict[str, str]]:
-        transcript: List[Dict[str, str]] = []
-        turns = 0
-        history: List[str] = []  # keep last answers for consistency
-
-        for q in questions:
-            if turns >= max_turns:
-                break
-            transcript.append({"question": q, "answer": ""})
-
-            # Mini-evidence hint (max 2 facts) + simple brand extraction from references
-            facts: List[str] = []
-            brands: List[str] = []
-            try:
-                digest = getattr(self, "evidence_digest_by_segment", {}) or {}
-                if segment_name and segment_name in digest:
-                    facts = list(digest[segment_name].get("facts") or [])[:2]
-                    refs = list(digest[segment_name].get("references") or [])[:6]
-                    seen = set()
-                    for r in refs:
-                        u = (r.get("url") or "").strip()
-                        host = urlparse(u).netloc.lower().replace("www.", "")
-                        if not host:
-                            continue
-                        parts = host.split(".")
-                        brand = parts[-2] if len(parts) >= 2 else host
-                        if brand and brand not in seen and brand.isalpha():
-                            seen.add(brand)
-                            brands.append(brand)
-                        if len(brands) >= 3:
-                            break
-            except Exception:
-                pass
-
-            evidence_hint = ""
-            if facts:
-                evidence_hint = (
-                    "\n\n(Background trends you might have casually heard about; do NOT sound like an expert — "
-                    "reflect them only if it feels natural: " + " | ".join(facts) + ")"
-                )
-            brand_hint = ""
-            if brands:
-                brand_hint = (
-                    "\n\n(If relevant, you may mention tools/services you've seen/used, e.g.: "
-                    + ", ".join(brands) + "; only if it genuinely fits your experience.)"
-                )
-
-            history_snippet = ""
-            if history:
-                last = " ".join(history[-2:])
-                history_snippet = f"\n\nYour previous points (for consistency): {last}"
-
-            cust_desc = (
-                "You are the interviewee from the specified customer segment.\n"
-                "ANSWER FORMAT:\n"
-                f"- {ANSWER_MIN_SENTENCES} to {ANSWER_MAX_SENTENCES} full sentences in natural English.\n"
-                "- Include at least one brief, concrete anecdote (e.g., 'last week…' or 'for instance…').\n"
-                "- Use numbers sparingly. At most ONE percentage per answer; prefer ranges or absolute units (€, minutes/week, #tools). If unsure, say 'roughly'.\n"
-                "- Anchor statements in the last 3–6 months when relevant (recency).\n"
-                "- Start directly with your point; do NOT begin with stock phrases like 'I now can give a great answer' or similar.\n"
-                "- No bullet points, no markdown, no note fragments.\n\n"
-                f"Role/segment: {customer.role}\n"
-                f"Backstory: {getattr(customer, 'backstory', '')}\n"
-                f"Question: {q}\n"
-                "Answer realistically and consistently with backstory/response style, motivations, objections, and dealbreakers."
-                + history_snippet
-                + evidence_hint
-                + brand_hint
-            )
-
-            cust_task = _mk_task(cust_desc, "A short, credible answer (3–6 sentences).", customer)
-            ans = str(self._run_single(cust_task)).strip()
-            ans = self._sanitize_text(ans)
-
-            if ENABLE_MICRO_PROBE and (turns + 1 < max_turns):
-                probe = "Can you ground that in one concrete situation with a rough number (€, minutes/week, or times/week)? Avoid extra percentages."
-                probe_desc = (
-                    "You are still the interviewee. "
-                    "Answer this follow-up in 2–3 sentences with one brief, concrete example. "
-                    "Use numbers sparingly; avoid more percentages.\n"
-                    f"Follow-up: {probe}"
-                )
-                probe_task = _mk_task(probe_desc, "A brief follow-up answer (2–3 sentences).", customer)
-                probe_ans = str(self._run_single(probe_task)).strip()
-                probe_ans = self._sanitize_text(probe_ans)
-                ans = (ans + " " + probe_ans).strip()
-
-            if facts:
-                chk = (
-                    "If you think about it: does any of this resonate with things you've seen/heard recently? "
-                    "Feel free to say 'not sure' if it doesn't."
-                )
-                chk_task = _mk_task(
-                    "You are still the interviewee. In ONE short sentence, react casually to this prompt: " + chk,
-                    "One casual sentence.",
-                    customer,
-                )
-                chk_ans = str(self._run_single(chk_task)).strip()
-                chk_ans = self._sanitize_text(chk_ans)
-                ans = (ans + " " + chk_ans).strip()
-
-            transcript[-1]["answer"] = ans
-            history.append(ans)
-            turns += 1
-
-        return transcript
-
-    def _instantiate_customer_agents(self, archetypes: List[Dict[str, Any]]):
-        t_crit = next(
-            (t for t in self.customer_templates if t.get("template_name") == "customer_critical_template"),
-            None,
-        )
-        t_open = next(
-            (t for t in self.customer_templates if t.get("template_name") == "customer_open_reflective_template"),
-            None,
-        )
-
-        def build_from_tpl(tpl: Dict[str, Any], seg_name: str, cust: Dict[str, Any]) -> Agent:
-            seg_slug = seg_name.lower().replace(" ", "_")
-            role = tpl.get("role", "").replace("{{segment_name}}", seg_name)
-            goal = tpl.get("goal", "").replace("{{segment_name}}", seg_name)
-            _ = tpl.get("name", "customer").replace("{{segment_slug}}", seg_slug)
-            backstory = cust.get("backstory", "")
-            response_style = cust.get("response_style", "")
-            motivations = ", ".join(cust.get("motivations", []))
-            objections = ", ".join(cust.get("objections", []))          # FIX default []
-            dealbreakers = ", ".join(cust.get("dealbreakers", []))       # FIX default []
-            return Agent(
-                role=role,
-                goal=goal,
-                backstory=(
-                    f"{backstory}\n\n"
-                    f"Response style: {response_style}\n"
-                    f"Motivations: {motivations}\n"
-                    f"Objections: {objections}\n"
-                    f"Dealbreakers: {dealbreakers}\n"
-                ),
-                allow_delegation=False,
-                verbose=False,
-                llm=LLM(model=os.getenv("MODEL_NAME", "gpt-4o-mini"), temperature=0.5, max_tokens=300),
-            )
-
-        for block in archetypes:
-            seg = block.get("segment")
-            customers = block.get("customers", [])
-            for idx, cust in enumerate(customers):
-                label = cust.get("label") or ("critical" if idx == 0 else "open_reflective")
-                if label == "critical" and t_crit:
-                    self.customer_agents[(seg, "critical")] = build_from_tpl(t_crit, seg, cust)
-                elif label == "open_reflective" and t_open:
-                    self.customer_agents[(seg, "open_reflective")] = build_from_tpl(t_open, seg, cust)
-
-    def _task_def(self, name: str) -> Dict[str, Any]:
-        for t in self.tasks_spec.get("tasks", []):
-            if t.get("name") == name:
-                return t
-        raise KeyError(f"Task '{name}' not found in {self.tasks_path}.")
-
-    def _run_single(self, task: Task) -> Any:
-        crew = Crew(agents=[task.agent], tasks=[task], process="sequential")
-        out = crew.kickoff()
-        if DEBUG_CREW:
-            print("\n" + "=" * 60)
-            print(f"[DEBUG_CREW] RAW OUTPUT for task ({task.agent.role}):")
-            try:
-                s = str(out)
-                print(s[:2000] + ("..." if len(s) > 2000 else ""))
-            except Exception:
-                print(repr(out))
-            print("=" * 60 + "\n")
-        return out
-
-    def _safe_json(self, text_out: Any) -> Dict[str, Any]:
-        s = str(text_out).strip()
-
-        try:
-            return json.loads(s)
-        except Exception:
-            pass
-
-        if "```" in s:
-            parts = s.split("```")
-            for p in parts:
-                p = p.strip()
-                if p.startswith("{") and p.endswith("}"):
-                    try:
-                        return json.loads(p)
-                    except Exception:
-                        pass
-
-        first = s.find("{")
-        last = s.rfind("}")
-        if first != -1 and last != -1 and last > first:
-            candidate = s[first:last + 1]
-            try:
-                return json.loads(candidate)
-            except Exception:
-                pass
-
-        return {}
 
 
 # ===== SAFETY PATCH: ensure _task_def exists on ValidationCrew ===============
 def __ensure__task_def__exists():
-    # Fallback implementation used if the method is missing (avoids AttributeError)
     def _task_def_fallback(self, name: str) -> Dict[str, Any]:
-        """
-        Robust task lookup. If tasks.yaml is missing a name, return a soft fallback
-        so the run can continue instead of crashing.
-        """
         try:
             for t in (getattr(self, "tasks_spec", {}) or {}).get("tasks", []):
                 if (t.get("name") or "").strip() == name:
                     return t
         except Exception:
             pass
-        # Soft fallback description to keep the pipeline running
         return {
             "name": name,
             "description": (
@@ -1182,7 +1172,6 @@ def __ensure__task_def__exists():
                 f"following the schema expected by the code. No markdown, no fences."
             ),
         }
-
     try:
         if not hasattr(ValidationCrew, "_task_def"):
             ValidationCrew._task_def = _task_def_fallback  # type: ignore[attr-defined]
