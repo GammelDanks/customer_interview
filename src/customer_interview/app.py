@@ -27,7 +27,7 @@ try:
 except Exception:
     pass
 
-# --- Secrets -> Environment (robust: flach ODER verschachtelt) ---------------
+# --- Secrets -> Environment (robust: flat OR nested) -------------------------
 def _hydrate_keys_from_secrets():
     def _get_nested(section, key):
         try:
@@ -52,11 +52,11 @@ def _hydrate_keys_from_secrets():
                 os.environ[env_key] = val
                 break
 
-    # Primärschlüssel
+    # Primary keys (accept flat and nested secrets)
     _set_if_missing("OPENAI_API_KEY", "OPENAI_API_KEY", ("openai", "openai_api_key"))
     _set_if_missing("YOU_API_KEY", "YOU_API_KEY", ("you", "api_key"))
 
-    # optionale Flags
+    # optional flags
     for k in ("MODEL_NAME", "YOU_SEARCH_ENABLED", "ANSWER_MIN_SENTENCES",
               "ANSWER_MAX_SENTENCES", "ENABLE_MICRO_PROBE"):
         if not os.getenv(k, "").strip():
@@ -66,10 +66,9 @@ def _hydrate_keys_from_secrets():
             except Exception:
                 pass
 
-# 1. Hydration so früh wie möglich
+# 1. Hydration as early as possible
 _hydrate_keys_from_secrets()
 # -----------------------------------------------------------------------------
-
 
 # --- SQLite upgrade shim (force pysqlite3 if stdlib sqlite is too old) -------
 import sys as _sys
@@ -274,8 +273,6 @@ st.caption("Define idea → segment customers → guidelines → simulate interv
 with st.sidebar:
     st.subheader("Settings")
 
-    # (API-Key-Felder entfernt – Keys kommen aus st.secrets / Environment)
-
     st.markdown("---")
     st.write("**Run options**")
     max_questions = st.slider("Max questions per segment", 5, 20, 12, 1)
@@ -292,6 +289,16 @@ with st.sidebar:
     os.environ["YOU_SEARCH_ENABLED"] = "true" if use_search else "false"
     you_k = st.slider("Max results per query (You.com)", 3, 10, int(os.getenv("YOU_MAX_RESULTS","6")), 1)
     os.environ["YOU_MAX_RESULTS"] = str(you_k)
+
+    # Optional: quick visibility of keys (masked)
+    st.markdown("---")
+    st.write("**API key check**")
+    oa = (os.getenv("OPENAI_API_KEY") or "").strip()
+    yk = (os.getenv("YOU_API_KEY") or "").strip()
+    def _mask(v: str) -> str:
+        return f"{v[:4]}…{v[-4:]}" if len(v) >= 8 else ("—" if not v else "****")
+    st.caption(f"OpenAI: {_mask(oa)}")
+    st.caption(f"You.com: {_mask(yk)}")
 
 # Inputs
 st.header("1) Describe the problem and the solution idea")
@@ -516,6 +523,16 @@ def _query_variants_for_segment(seg_name: str, seg_type: str, idea_text: str) ->
         variants.append(core)
     return variants
 
+def _get_search():
+    try:
+        from .integrations.search_factory import get_search_provider
+    except Exception:
+        try:
+            from CustomerInterview.integrations.search_factory import get_search_provider
+        except Exception:
+            from customer_interview.integrations.search_factory import get_search_provider
+    return get_search_provider()
+
 def _fetch_evidence_for_segments(segments: list[dict], k: int = 6) -> dict[str, list[dict]]:
     provider = _get_search()
     if provider is None or os.getenv("YOU_SEARCH_ENABLED","false").lower() != "true":
@@ -554,7 +571,7 @@ def _inject_evidence_into_text(base: str, ev: list[dict], seg_label: str, is_for
     )
     return (base or "") + postfix
 
-# Fallback questions if the model omitted some segments in guidelines
+# Fallback question banks in app scope (mirror crew)
 B2C_FALLBACK = [
     "Walk me through a typical day and how you currently handle this area.",
     "What’s the most frustrating part — why?",
@@ -589,7 +606,7 @@ def _ensure_guidelines_cover_segments(crew, guidelines: list[dict]) -> list[dict
 # -----------------------------------------------------------------------------
 if run_clicked:
     if not (os.getenv("OPENAI_API_KEY") or "").strip():
-        st.error("No OpenAI API key provided. Add it in the sidebar.")
+        st.error("OpenAI API key is missing. Add it to Streamlit secrets as [openai].openai_api_key.")
         st.stop()
 
     crew = ValidationCrew()
@@ -610,7 +627,7 @@ if run_clicked:
     # Optional: evidence per segment (no-op if YOU_SEARCH_ENABLED=false)
     evidence_by_segment = _fetch_evidence_for_segments(segments, k=int(os.getenv("YOU_MAX_RESULTS","6")))
 
-    # NEW: Provide evidence to crew and build a digest
+    # Provide evidence to crew and build a digest
     crew.evidence_by_segment = evidence_by_segment or {}
     _ = crew.digest_evidence()  # creates crew.evidence_digest_by_segment
 
@@ -654,7 +671,7 @@ if run_clicked:
             max_questions=max_questions,
         )
 
-        # NEW: Enrich questions with evidence facts
+        # Enrich questions with evidence facts
         guidelines = crew.enrich_guidelines_with_evidence(guidelines, max_questions=max_questions)
 
         # Ensure every (max 3) segment has questions
