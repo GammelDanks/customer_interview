@@ -9,6 +9,14 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, LLM
+try:
+    # Use enum if available (newer CrewAI)
+    from crewai import Process
+    PROCESS_SEQ = Process.sequential
+except Exception:
+    # Fallback for older CrewAI
+    PROCESS_SEQ = "sequential"
+
 import yaml
 
 # --- Load ENV cleanly (no project/org needed) ---------------------------------
@@ -16,22 +24,36 @@ load_dotenv(override=True)
 
 _api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
 os.environ["OPENAI_API_KEY"] = _api_key
-print("OPENAI_API_KEY loaded:", bool(_api_key), "| length:", len(_api_key), "| tail:", _api_key[-6:])
+tail = _api_key[-6:] if len(_api_key) >= 6 else ""
+print(f"OPENAI_API_KEY loaded: {bool(_api_key)} | length: {len(_api_key)} | tail: {tail}")
 
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 PKG_DIR = Path(__file__).resolve().parent
+TASKS_DEFAULT = PKG_DIR / "tasks.yaml"
+TASKS_FALLBACK = PKG_DIR / "task.yaml"
 
 
 def _load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    try:
+        # tolerate task.yaml vs tasks.yaml
+        if not path.exists():
+            alt = TASKS_FALLBACK if path.name == "tasks.yaml" else TASKS_DEFAULT
+            path = alt if alt.exists() else path
+        if not path.exists():
+            return {}
+        with path.open("r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"[crew.py] YAML load error for {path}: {e}")
+        return {}
 
 
 def _default_llm() -> LLM:
-    """Create a CrewAI LLM object (OpenAI via LiteLLM)."""
+    """Create a CrewAI LLM object (OpenAI via LiteLLM) with explicit api_key."""
     return LLM(
         model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
         temperature=0.2,
+        api_key=(os.getenv("OPENAI_API_KEY") or "").strip(),
     )
 
 
@@ -78,7 +100,7 @@ DEBUG_CREW = os.getenv("DEBUG_CREW", "0") == "1"
 # Answer “dials” from .env
 ANSWER_MIN_SENTENCES = int(os.getenv("ANSWER_MIN_SENTENCES", "3"))
 ANSWER_MAX_SENTENCES = int(os.getenv("ANSWER_MAX_SENTENCES", "6"))
-# WICHTIG: Standardmäßig Micro-Probe aus → weniger Redundanz
+# default off → less redundancy
 ENABLE_MICRO_PROBE = os.getenv("ENABLE_MICRO_PROBE", "0") == "1"
 
 # English question banks (fallbacks)
@@ -120,7 +142,7 @@ class ValidationCrew:
         agents_yaml: Optional[str | Path] = None,
     ):
         # Default: YAMLs next to crew.py
-        self.tasks_path = Path(tasks_yaml) if tasks_yaml else (PKG_DIR / "tasks.yaml")
+        self.tasks_path = Path(tasks_yaml) if tasks_yaml else TASKS_DEFAULT
         self.agents_path = Path(agents_yaml) if agents_yaml else (PKG_DIR / "agents.yaml")
 
         self.tasks_spec = _load_yaml(self.tasks_path)
@@ -145,7 +167,9 @@ class ValidationCrew:
     # ---------- Init ----------
     def _init_fixed_agents(self):
         for row in self.agents_spec.get("agents", []):
-            name = row["name"]
+            name = row.get("name")
+            if not name:
+                continue
             self.agents[name] = _mk_agent(name, row)
         self.customer_templates = self.agents_spec.get("customer_archetype_templates", [])
 
@@ -162,7 +186,8 @@ class ValidationCrew:
                             "name": str(name),
                             "type": s.get("type") or s.get("business_type") or "",
                             "needs_and_concerns": s.get("needs_and_concerns") or s.get("pains") or s.get("needs") or [],
-                            "adoption_likelihood": s.get("adoption_likelihood") or s.get("adoption") or "",
+                            # tolerate likelihood_to_adopt from tasks.yaml
+                            "adoption_likelihood": s.get("adoption_likelihood") or s.get("likelihood_to_adopt") or s.get("adoption") or "",
                             "willingness_to_pay": s.get("willingness_to_pay") or s.get("wtp") or "",
                             "notes": s.get("notes") or "",
                         })
@@ -566,7 +591,7 @@ class ValidationCrew:
             return s
         descriptors = ["a small amount", "a moderate amount", "a noticeable amount", "a significant amount"]
         idx = {"c": 0}
-        def repl(m: re.Match) -> str:
+        def repl(m: re: re.Match) -> str:
             idx["c"] += 1
             return m.group(0) if idx["c"] == 1 else descriptors[(idx["c"] - 2) % len(descriptors)]
         return re.sub(r"\b(?:about|around|approx\.?)?\s*\d{1,3}\s?%\b", repl, s, flags=re.IGNORECASE)
@@ -605,14 +630,13 @@ class ValidationCrew:
     def _extract_topics(answer: str) -> Set[str]:
         a = (answer or "").lower()
         topics: Set[str] = set()
-        # typische Wiederholungsmuster
+        # typical repetition patterns
         for m in re.findall(r"\b\d{1,2}\s*minutes?\s*(of\s+)?(meditation|mindfulness|yoga|breath\w*)\b", a):
             topics.add("minutes+mindfulness")
             topics.add("mindfulness")
         for w in ["meditation", "mindfulness", "yoga", "breathing", "breathwork", "journaling", "meal prep"]:
             if w in a:
                 topics.add(w)
-        # einfache Bigramme
         toks = [t for t in re.findall(r"[a-z0-9]+", a) if len(t) >= 3]
         for i in range(len(toks) - 1):
             topics.add(f"{toks[i]} {toks[i+1]}")
@@ -645,7 +669,6 @@ class ValidationCrew:
         if not unique_sents and cand_sents:
             unique_sents = cand_sents[:1]
 
-        # Fragebezug sicherstellen
         key = self._key_terms_from_question(question)
         if key:
             key_hit = any(any(k in self._tok(s) for k in key) for s in unique_sents)
@@ -654,7 +677,7 @@ class ValidationCrew:
 
         return " ".join(unique_sents).strip() or answer
 
-    # ---------- convenience for UI (optional) ----------
+    # ---------- convenience for UI ----------
     def segments_with_archetypes(self) -> List[Dict[str, Any]]:
         by_seg = {a["segment"]: a.get("customers", []) for a in self.archetypes}
         merged = []
@@ -676,15 +699,14 @@ class ValidationCrew:
     ) -> List[Dict[str, str]]:
         transcript: List[Dict[str, str]] = []
         turns = 0
-        history: List[str] = []  # keep last answers for consistency
-        banlist: Set[str] = set()  # Themen/Patterns, die wir nicht wiederholen
+        history: List[str] = []
+        banlist: Set[str] = set()
 
         for q in questions:
             if turns >= max_turns:
                 break
             transcript.append({"question": q, "answer": ""})
 
-            # Mini-evidence hint (max 2 facts) + simple brand extraction from references
             facts: List[str] = []
             brands: List[str] = []
             try:
@@ -793,10 +815,7 @@ class ValidationCrew:
 
             transcript[-1]["answer"] = ans
             history.append(ans)
-
-            # banlist updaten, um Wiederholungen (z.B. 15 Min. Meditation) zu vermeiden
             banlist |= self._extract_topics(ans)
-
             turns += 1
 
         return transcript
@@ -833,7 +852,7 @@ class ValidationCrew:
                 ),
                 allow_delegation=False,
                 verbose=False,
-                llm=LLM(model=os.getenv("MODEL_NAME", "gpt-4o-mini"), temperature=0.5, max_tokens=300),
+                llm=LLM(model=os.getenv("MODEL_NAME", "gpt-4o-mini"), temperature=0.5),
             )
 
         for block in archetypes:
@@ -853,7 +872,7 @@ class ValidationCrew:
         raise KeyError(f"Task '{name}' not found in {self.tasks_path}.")
 
     def _run_single(self, task: Task) -> Any:
-        crew = Crew(agents=[task.agent], tasks=[task], process="sequential")
+        crew = Crew(agents=[task.agent], tasks=[task], process=PROCESS_SEQ)
         out = crew.kickoff()
         if DEBUG_CREW:
             print("\n" + "=" * 60)
@@ -864,6 +883,11 @@ class ValidationCrew:
             except Exception:
                 print(repr(out))
             print("=" * 60 + "\n")
+        # Robust across CrewAI versions
+        if hasattr(out, "raw") and isinstance(out.raw, (str, dict)):
+            return out.raw
+        if hasattr(out, "output") and isinstance(out.output, (str, dict)):
+            return out.output
         return out
 
     def _safe_json(self, text_out: Any) -> Dict[str, Any]:
@@ -1052,7 +1076,7 @@ class ValidationCrew:
         self.segment_summaries = summaries
         return self.segment_summaries
 
-    # ---------- NEW: Product requirements derivation ----------
+    # ---------- Product requirements derivation ----------
     def _req_item_defaults(self, r: Dict[str, Any], idx: int) -> Dict[str, Any]:
         def _listify(x):
             if x is None:
@@ -1150,7 +1174,7 @@ class ValidationCrew:
         self.product_requirements = norm
         return self.product_requirements
 
-    # ---------- Comparison (deprecated / no-op) ----------
+    # ---------- Comparison (no-op) ----------
     def cross_segment_comparison(self, weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         self.comparison = {}
         return self.comparison
