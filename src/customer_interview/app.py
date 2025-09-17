@@ -107,28 +107,22 @@ os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
 
 # -----------------------------------------------------------------------------
-# Crew import (case-robust)
+# Crew import (absolute, lowercase)
 # -----------------------------------------------------------------------------
-ValidationCrew = None
-_last_err = None
+try:
+    from customer_interview.crew import ValidationCrew  # absolute import, package-relative
+except Exception as _e:
+    import traceback
+    st.error(
+        "Import von ValidationCrew fehlgeschlagen.\n"
+        "Bitte prüfe:\n"
+        "1) Existiert die Datei src/customer_interview/crew.py?\n"
+        "2) Heißt der Paketordner exakt 'customer_interview' (lowercase)?\n"
+        "3) Wird die App via 'streamlit run src/customer_interview/app.py' gestartet?"
+    )
+    st.code("".join(traceback.format_exception_only(type(_e), _e)))
+    st.stop()
 
-for _path in (".crew", "CustomerInterview.crew", "customer_interview.crew"):
-    try:
-        if _path == ".crew":
-            from .crew import ValidationCrew as _VC
-        elif _path == "CustomerInterview.crew":
-            from CustomerInterview.crew import ValidationCrew as _VC
-        else:
-            from customer_interview.crew import ValidationCrew as _VC
-        ValidationCrew = _VC
-        break
-    except Exception as _e:
-        _last_err = _e
-
-if ValidationCrew is None:
-    raise ImportError(
-        "Could not import ValidationCrew; tried .crew, CustomerInterview.crew, customer_interview.crew"
-    ) from _last_err
 
 
 # --- Web search provider (lazy import, case-robust) --------------------------
