@@ -1,4 +1,4 @@
-# src/customer_interview/app.py
+# src/CustomerInterview/app.py
 import os
 import sys
 import json
@@ -8,13 +8,8 @@ import streamlit as st
 import pandas as pd
 
 # -----------------------------------------------------------------------------
-# UI config as early as possible
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Customer Interview Crew", page_icon="🧩", layout="wide")
-
-# -----------------------------------------------------------------------------
 # Path repair so we can import whether we run:
-#   streamlit run src/customer_interview/app.py
+#   streamlit run src/CustomerInterview/app.py
 # or with PYTHONPATH=./src
 # -----------------------------------------------------------------------------
 _THIS = Path(__file__).resolve()
@@ -22,12 +17,6 @@ ROOT = _THIS.parents[2] if len(_THIS.parents) >= 2 else _THIS.parent
 SRC = ROOT / "src"
 if SRC.exists() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
-
-# --- Preflight: verify package folder exists ---------------------------------
-PKG_DIR = SRC / "customer_interview"
-if not PKG_DIR.exists():
-    st.error(f"Package folder not found: {PKG_DIR}")
-    st.stop()
 
 # -----------------------------------------------------------------------------
 # Load .env
@@ -38,103 +27,33 @@ try:
 except Exception:
     pass
 
-# --- Secrets -> Environment (robust: flach ODER verschachtelt) ---------------
-def _hydrate_keys_from_secrets():
-    def _get_nested(section, key):
-        try:
-            return str(st.secrets[section][key]).strip()
-        except Exception:
-            return ""
-
-    def _set_if_missing(env_key, *candidates):
-        if os.getenv(env_key, "").strip():
-            return
-        for cand in candidates:
-            val = ""
-            if isinstance(cand, tuple):
-                val = _get_nested(cand[0], cand[1])
-            else:
-                try:
-                    if cand in st.secrets:
-                        val = str(st.secrets[cand]).strip()
-                except Exception:
-                    pass
-            if val:
-                os.environ[env_key] = val
-                break
-
-    # Primärschlüssel
-    _set_if_missing("OPENAI_API_KEY", "OPENAI_API_KEY", ("openai", "openai_api_key"))
-    _set_if_missing("YOU_API_KEY", "YOU_API_KEY", ("you", "api_key"))
-
-    # optionale Flags
-    for k in ("MODEL_NAME", "YOU_SEARCH_ENABLED", "ANSWER_MIN_SENTENCES",
-              "ANSWER_MAX_SENTENCES", "ENABLE_MICRO_PROBE", "YOU_MAX_RESULTS"):
-        if not os.getenv(k, "").strip():
-            try:
-                if k in st.secrets:
-                    os.environ[k] = str(st.secrets[k]).strip()
-            except Exception:
-                pass
-
-# 1. Hydration so früh wie möglich
-_hydrate_keys_from_secrets()
-
-# --- SQLite upgrade shim (force pysqlite3 if stdlib sqlite is too old) -------
-import sys as _sys
-try:
-    import sqlite3 as _sqlite3
-    def _ver_tuple(v):
-        try:
-            return tuple(int(x) for x in str(v).split(".")[:3])
-        except Exception:
-            return (0, 0, 0)
-    if _ver_tuple(_sqlite3.sqlite_version) < (3, 35, 0):
-        import pysqlite3 as _pysqlite3
-        _sys.modules["sqlite3"] = _pysqlite3
-        _sys.modules["sqlite3.dbapi2"] = _pysqlite3.dbapi2
-except Exception:
-    try:
-        import pysqlite3 as _pysqlite3
-        _sys.modules["sqlite3"] = _pysqlite3
-        _sys.modules["sqlite3.dbapi2"] = _pysqlite3.dbapi2
-    except Exception:
-        pass
-
-# -----------------------------------------------------------------------------
 # Basic env defaults
-# -----------------------------------------------------------------------------
 os.environ.setdefault("MODEL_NAME", os.getenv("MODEL_NAME", "gpt-4o-mini"))
 os.environ.setdefault("ANSWER_MIN_SENTENCES", "3")
 os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
-os.environ.setdefault("YOU_MAX_RESULTS", os.getenv("YOU_MAX_RESULTS", "6"))
 
 # -----------------------------------------------------------------------------
-# Crew import (absolute, lowercase)
+# Crew import (case-robust)
 # -----------------------------------------------------------------------------
 try:
-    from customer_interview.crew import ValidationCrew  # absolute import, package-relative
-except Exception as _e:
-    import traceback
-    st.error(
-        "Import von ValidationCrew fehlgeschlagen.\n"
-        "Bitte prüfe:\n"
-        "1) Existiert die Datei src/customer_interview/crew.py?\n"
-        "2) Heißt der Paketordner exakt 'customer_interview' (lowercase)?\n"
-        "3) Wird die App via 'streamlit run src/customer_interview/app.py' gestartet?"
-    )
-    st.code("".join(traceback.format_exception_only(type(_e), _e)))
-    st.stop()
-
-# --- Web search provider (lazy import) ---------------------------------------
-def _get_search():
-    """Return a search provider instance or None, never raising outward."""
+    from .crew import ValidationCrew  # relative
+except Exception:
     try:
-        from customer_interview.integrations.search_factory import get_search_provider
-        return get_search_provider()
+        from CustomerInterview.crew import ValidationCrew  # absolute (capitalized)
     except Exception:
-        return None
+        from customer_interview.crew import ValidationCrew  # absolute (lowercase, fallback)
+
+# --- NEW: web search provider (lazy import, case-robust) ---------------------
+def _get_search():
+    try:
+        from .integrations.search_factory import get_search_provider
+    except Exception:
+        try:
+            from CustomerInterview.integrations.search_factory import get_search_provider
+        except Exception:
+            from customer_interview.integrations.search_factory import get_search_provider
+    return get_search_provider()
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -181,7 +100,7 @@ def render_segments_with_archetypes(st_container, merged):
             else:
                 st.caption("—")
             st.markdown("**Adoption likelihood**")
-            st.write(seg.get("adoption_likelihood") or seg.get("likelihood_to_adopt") or "—")
+            st.write(seg.get("adoption_likelihood") or "—")
         with cols[1]:
             st.markdown("**Willingness to pay**")
             st.write(seg.get("willingness_to_pay") or "—")
@@ -278,8 +197,79 @@ def render_requirements(st_container, requirements_dict: dict):
         st_container.caption("—")
 
 # -----------------------------------------------------------------------------
-# Domain-aware evidence query builder (multi-industry)
+# UI
 # -----------------------------------------------------------------------------
+st.set_page_config(page_title="Customer Interview Crew", page_icon="🧩", layout="wide")
+st.title("🧩 Customer Interview Crew")
+st.caption("Define idea → segment customers → guidelines → simulate interviews → synthesize → requirements.")
+
+with st.sidebar:
+    st.subheader("Settings")
+    ui_api = st.text_input("OpenAI API Key", value=(os.getenv("OPENAI_API_KEY") or ""), type="password")
+    if ui_api:
+        os.environ["OPENAI_API_KEY"] = ui_api.strip()
+
+    st.markdown("---")
+    st.write("**Run options**")
+    max_questions = st.slider("Max questions per segment", 5, 20, 12, 1)
+    max_turns = st.slider("Max turns per interview", 4, 20, 8, 1)
+    max_segments = st.slider("Max segments", 1, 5, 3, 1, help="Hard-cap to avoid overload.")
+
+    st.markdown("---")
+    debug = st.checkbox("Verbose debug (console)", value=False, help="Sets DEBUG_CREW=1 for raw model outputs.")
+    os.environ["DEBUG_CREW"] = "1" if debug else "0"
+
+    st.markdown("---")
+    st.write("**Web search (You.com)**")
+    you_api = st.text_input("You.com API Key", value=os.getenv("YOU_API_KEY",""), type="password")
+    if you_api:
+        os.environ["YOU_API_KEY"] = you_api.strip()
+    use_search = st.toggle("Use web search (You.com)", value=os.getenv("YOU_SEARCH_ENABLED","false").lower()=="true")
+    os.environ["YOU_SEARCH_ENABLED"] = "true" if use_search else "false"
+    you_k = st.slider("Max results per query (You.com)", 3, 10, int(os.getenv("YOU_MAX_RESULTS","6")), 1)
+    os.environ["YOU_MAX_RESULTS"] = str(you_k)
+
+# Inputs
+st.header("1) Describe the problem and the solution idea")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    problem_summary = st.text_area("Problem summary *(optional)*", height=150)
+with col2:
+    value_prop = st.text_area("Solution & value proposition *(optional)*", height=150)
+with col3:
+    core_tech = st.text_area("Core technologies *(optional)*", height=150)
+
+business_idea = "\n".join(
+    [
+        ensure_english_guardrail(""),
+        f"Problem: {problem_summary.strip()}" if problem_summary else "",
+        f"Solution & value proposition: {value_prop.strip()}" if value_prop else "",
+        f"Core technologies: {core_tech.strip()}" if core_tech else "",
+    ]
+).strip()
+
+if not problem_summary and not value_prop and not core_tech:
+    business_idea = ensure_english_guardrail(textwrap.dedent("""
+        Problem: Busy professionals struggle to maintain healthy eating habits due to lack of time and decision fatigue.
+        Solution & value proposition: An AI-powered nutrition coach that plans meals, suggests quick options, and adapts to preferences and constraints while protecting privacy.
+        Core technologies: Mobile app, LLM for dialogue & guidance, recommendation engine, calendar integration.
+    """).strip())
+
+market_context = "Target geography: EU. Target channels: mobile-first. Keep all outputs in English."
+constraints = ["privacy-by-design", "low-friction onboarding", "mobile-first UX"]
+
+run_clicked = st.button("▶️ Run pipeline")
+st.markdown("---")
+
+# Output containers
+seg_box = st.container()
+guide_box = st.container()
+int_box = st.container()
+sum_box = st.container()
+req_box = st.container()
+
+# --- Domain-aware evidence query builder (multi-industry) --------------------
 GENERIC_NEGATIVES = [
     "-accounting", "-finance", "-tax", "-crm", "-timesheet", "-payroll", "-bookkeeping",
     "-construction", "-law", "-legal software", "-project management software",
@@ -467,7 +457,7 @@ def _fetch_evidence_for_segments(segments: list[dict], k: int = 6) -> dict[str, 
     if provider is None or os.getenv("YOU_SEARCH_ENABLED","false").lower() != "true":
         return {}
     out: dict[str, list[dict]] = {}
-    idea_text = ""  # keep simple / optional
+    idea_text = (problem_summary or "") + " " + (value_prop or "") + " " + (core_tech or "")
     for s in segments or []:
         seg_name = s.get("name") or "Segment"
         seg_type = s.get("type") or ""
@@ -531,77 +521,11 @@ def _ensure_guidelines_cover_segments(crew, guidelines: list[dict]) -> list[dict
     return out
 
 # -----------------------------------------------------------------------------
-# UI
-# -----------------------------------------------------------------------------
-st.title("🧩 Customer Interview Crew")
-st.caption("Define idea → segment customers → guidelines → simulate interviews → synthesize → requirements.")
-
-with st.sidebar:
-    st.subheader("Settings")
-
-    st.markdown("---")
-    st.write("**Run options**")
-    max_questions = st.slider("Max questions per segment", 5, 20, 12, 1)
-    max_turns = st.slider("Max turns per interview", 4, 20, 8, 1)
-    max_segments = st.slider("Max segments", 1, 5, 3, 1, help="Hard-cap to avoid overload.")
-
-    st.markdown("---")
-    debug = st.checkbox("Verbose debug (console)", value=False, help="Sets DEBUG_CREW=1 for raw model outputs.")
-    os.environ["DEBUG_CREW"] = "1" if debug else "0"
-
-    st.markdown("---")
-    st.write("**Web search (You.com)**")
-    use_search = st.toggle("Use web search (You.com)", value=os.getenv("YOU_SEARCH_ENABLED","false").lower()=="true")
-    os.environ["YOU_SEARCH_ENABLED"] = "true" if use_search else "false"
-    you_k = st.slider("Max results per query (You.com)", 3, 10, int(os.getenv("YOU_MAX_RESULTS","6")), 1)
-    os.environ["YOU_MAX_RESULTS"] = str(you_k)
-
-# Inputs
-st.header("1) Describe the problem and the solution idea")
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    problem_summary = st.text_area("Problem summary *(optional)*", height=150)
-with col2:
-    value_prop = st.text_area("Solution & value proposition *(optional)*", height=150)
-with col3:
-    core_tech = st.text_area("Core technologies *(optional)*", height=150)
-
-business_idea = "\n".join(
-    [
-        ensure_english_guardrail(""),
-        f"Problem: {problem_summary.strip()}" if problem_summary else "",
-        f"Solution & value proposition: {value_prop.strip()}" if value_prop else "",
-        f"Core technologies: {core_tech.strip()}" if core_tech else "",
-    ]
-).strip()
-
-if not problem_summary and not value_prop and not core_tech:
-    business_idea = ensure_english_guardrail(textwrap.dedent("""
-        Problem: Busy professionals struggle to maintain healthy eating habits due to lack of time and decision fatigue.
-        Solution & value proposition: An AI-powered nutrition coach that plans meals, suggests quick options, and adapts to preferences and constraints while protecting privacy.
-        Core technologies: Mobile app, LLM for dialogue & guidance, recommendation engine, calendar integration.
-    """).strip())
-
-market_context = "Target geography: EU. Target channels: mobile-first. Keep all outputs in English."
-constraints = ["privacy-by-design", "low-friction onboarding", "mobile-first UX"]
-
-run_clicked = st.button("▶️ Run pipeline")
-st.markdown("---")
-
-# Output containers
-seg_box = st.container()
-guide_box = st.container()
-int_box = st.container()
-sum_box = st.container()
-req_box = st.container()
-
-# -----------------------------------------------------------------------------
 # RUN
 # -----------------------------------------------------------------------------
 if run_clicked:
     if not (os.getenv("OPENAI_API_KEY") or "").strip():
-        st.error("No OpenAI API key provided. Add it in Streamlit secrets as [openai].openai_api_key.")
+        st.error("No OpenAI API key provided. Add it in the sidebar.")
         st.stop()
 
     crew = ValidationCrew()
@@ -612,7 +536,7 @@ if run_clicked:
         crew.segments = (crew.segments or [])[:max_segments]
         segments = crew.segments
 
-        _ = crew.propose_customer_archetypes()
+        archetypes = crew.propose_customer_archetypes()
         merged = crew.segments_with_archetypes()
 
     with seg_box:
@@ -622,11 +546,11 @@ if run_clicked:
     # Optional: evidence per segment (no-op if YOU_SEARCH_ENABLED=false)
     evidence_by_segment = _fetch_evidence_for_segments(segments, k=int(os.getenv("YOU_MAX_RESULTS","6")))
 
-    # Evidence digest
+    # NEW: Provide evidence to crew and build a digest
     crew.evidence_by_segment = evidence_by_segment or {}
-    _ = crew.digest_evidence()
+    _ = crew.digest_evidence()  # creates crew.evidence_digest_by_segment
 
-    # --- Preview before generating guidelines ---
+    # --- Preview before generating guidelines: sources and enriched goal text ---
     with guide_box:
         st.subheader("3) Interview guidelines")
         with st.expander("Preview: sources that will inform the guidelines (per segment)"):
@@ -666,7 +590,10 @@ if run_clicked:
             max_questions=max_questions,
         )
 
+        # NEW: Enrich questions with evidence facts
         guidelines = crew.enrich_guidelines_with_evidence(guidelines, max_questions=max_questions)
+
+        # Ensure every (max 3) segment has questions
         guidelines = _ensure_guidelines_cover_segments(crew, guidelines)
         crew.segment_guidelines = guidelines
 
@@ -679,7 +606,7 @@ if run_clicked:
                 st.markdown(f"**{seg_name}**")
                 st.table(seg_df.drop(columns=["Segment"]).reset_index(drop=True))
 
-    # --- Preview before interviews: evidence JSON ---
+    # --- Preview before interviews: evidence JSON that will be provided ---
     with int_box:
         st.subheader("4) Simulated interviews")
         with st.expander("Preview: evidence context that will be provided to interview agents (JSON)"):
