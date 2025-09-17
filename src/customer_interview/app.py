@@ -248,6 +248,10 @@ st.caption("Define idea → segment customers → guidelines → simulate interv
 
 with st.sidebar:
     st.subheader("Settings")
+        # Optional: visuelle Kontrolle, ob Keys im ENV ankommen (kein Leak)
+    st.caption(f"OpenAI key present: {'✅' if bool(os.getenv('OPENAI_API_KEY')) else '❌'}")
+    st.caption(f"You.com key present: {'✅' if bool(os.getenv('YOU_API_KEY')) else '❌'}")
+
     ui_api = st.text_input("OpenAI API Key", value=(os.getenv("OPENAI_API_KEY") or ""), type="password")
     if ui_api:
         os.environ["OPENAI_API_KEY"] = ui_api.strip()
