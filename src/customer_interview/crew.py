@@ -585,16 +585,24 @@ class ValidationCrew:
             out = re.sub(p, "", out, flags=re.IGNORECASE)
         return re.sub(r"^\s*[`'\"]\s*", "", out).lstrip()
 
-    @staticmethod
-    def _soften_extra_percentages(s: str) -> str:
-        if not s or "%" not in s:
-            return s
-        descriptors = ["a small amount", "a moderate amount", "a noticeable amount", "a significant amount"]
-        idx = {"c": 0}
-        def repl(m: re: re.Match) -> str:
-            idx["c"] += 1
-            return m.group(0) if idx["c"] == 1 else descriptors[(idx["c"] - 2) % len(descriptors)]
-        return re.sub(r"\b(?:about|around|approx\.?)?\s*\d{1,3}\s?%\b", repl, s, flags=re.IGNORECASE)
+   @staticmethod
+def _soften_extra_percentages(s: str) -> str:
+    if not s or "%" not in s:
+        return s
+    descriptors = ["a small amount", "a moderate amount", "a noticeable amount", "a significant amount"]
+    idx = {"c": 0}
+
+    def repl(m: re.Match) -> str:
+        idx["c"] += 1
+        # erste Prozentangabe bleibt, weitere werden “weichgespült”
+        return m.group(0) if idx["c"] == 1 else descriptors[(idx["c"] - 2) % len(descriptors)]
+
+    return re.sub(
+        r"\b(?:about|around|approx\.?)?\s*\d{1,3}\s?%\b",
+        repl,
+        s,
+        flags=re.IGNORECASE,
+    )
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
