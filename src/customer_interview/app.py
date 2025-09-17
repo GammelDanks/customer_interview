@@ -8,9 +8,10 @@ import streamlit as st
 import pandas as pd
 
 # -----------------------------------------------------------------------------
-// Path repair so we can import whether we run:
-//   streamlit run src/customer_interview/app.py
-// or with PYTHONPATH=./src
+# Path repair so we can import whether we run:
+#   streamlit run src/customer_interview/app.py
+# or with PYTHONPATH=./src
+
 # -----------------------------------------------------------------------------
 _THIS = Path(__file__).resolve()
 ROOT = _THIS.parents[2] if len(_THIS.parents) >= 2 else _THIS.parent
