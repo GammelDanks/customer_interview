@@ -13,10 +13,13 @@ import yaml
 # --- Load ENV cleanly (no project/org needed) ---------------------------------
 load_dotenv(override=True)
 
-_api_key = os.getenv("OPENAI_API_KEY", "")
-_api_key = _api_key.strip() if _api_key else ""
-os.environ["OPENAI_API_KEY"] = _api_key
-print("OPENAI_API_KEY loaded:", bool(_api_key), "| length:", len(_api_key), "| tail:", _api_key[-6:])
+_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+# Nur setzen, wenn wirklich vorhanden – nie mit leerem String überschreiben
+if _api_key:
+    os.environ["OPENAI_API_KEY"] = _api_key
+# Kein Schlüsselteil im Log ausgeben
+print("OPENAI_API_KEY present:", bool(_api_key))
+
 
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 
