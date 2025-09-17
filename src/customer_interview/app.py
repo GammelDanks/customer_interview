@@ -101,27 +101,47 @@ os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Crew import (case-robust)
 # -----------------------------------------------------------------------------
 try:
     from .crew import ValidationCrew  # relative
-except Exception:
+except Exception as _e1:
     try:
-        from customer_interview.crew import ValidationCrew  # absolute (lowercase)
-    except Exception as _e:
-        raise _e
+        from CustomerInterview.crew import ValidationCrew  # absolute (capitalized)
+    except Exception as _e2:
+        try:
+            from customer_interview.crew import ValidationCrew  # absolute (lowercase)
+        except Exception as _e3:
+            # zeig den eigentlichsten Fehler an
+            raise _e3
 
-# --- NEW: web search provider (lazy import, case-robust) ---------------------
+# --- Web search provider (lazy import, case-robust) --------------------------
 def _get_search():
+    """
+    Liefert einen Search-Provider oder None, ohne Exceptions nach außen.
+    """
+    # 1) relative
     try:
         from .integrations.search_factory import get_search_provider
+        return get_search_provider()
     except Exception:
-        try:
-            from customer_interview.integrations.search_factory import get_search_provider
-        except Exception:
-            def get_search_provider():
-                return None
-    return get_search_provider()
+        pass
+    # 2) absolute (capitalized)
+    try:
+        from CustomerInterview.integrations.search_factory import get_search_provider
+        return get_search_provider()
+    except Exception:
+        pass
+    # 3) absolute (lowercase)
+    try:
+        from customer_interview.integrations.search_factory import get_search_provider
+        return get_search_provider()
+    except Exception:
+        pass
+    # 4) Fallback
+    return None
+
 
 # -----------------------------------------------------------------------------
 # Helpers
