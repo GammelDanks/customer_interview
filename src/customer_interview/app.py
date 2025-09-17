@@ -125,30 +125,14 @@ except Exception as _e:
 
 
 
-# --- Web search provider (lazy import, case-robust) --------------------------
+# --- Web search provider (lazy import) ---------------------------------------
 def _get_search():
     """Return a search provider instance or None, never raising outward."""
-    # 1) relative
     try:
-        from .integrations.search_factory import get_search_provider as _g
-        return _g()
+        from customer_interview.integrations.search_factory import get_search_provider
+        return get_search_provider()
     except Exception:
-        pass
-    # 2) absolute (capitalized)
-    try:
-        from CustomerInterview.integrations.search_factory import get_search_provider as _g
-        return _g()
-    except Exception:
-        pass
-    # 3) absolute (lowercase)
-    try:
-        from customer_interview.integrations.search_factory import get_search_provider as _g
-        return _g()
-    except Exception:
-        pass
-    # 4) fallback
-    return None
-
+        return None
 
 
 # -----------------------------------------------------------------------------
