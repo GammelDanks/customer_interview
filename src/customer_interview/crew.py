@@ -3,7 +3,7 @@ import os
 import re
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set, Union
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -11,16 +11,14 @@ from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, LLM
 import yaml
 
-# --- Load ENV cleanly (no project/org needed) ---------------------------------
+# --- ENV laden ---------------------------------------------------------------
 load_dotenv(override=True)
 
-_api_key = os.getenv("OPENAI_API_KEY", "")
-_api_key = _api_key.strip() if _api_key else ""
+_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
 os.environ["OPENAI_API_KEY"] = _api_key
 print("OPENAI_API_KEY loaded:", bool(_api_key), "| length:", len(_api_key), "| tail:", _api_key[-6:])
 
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-
 PKG_DIR = Path(__file__).resolve().parent
 
 
@@ -30,11 +28,7 @@ def _load_yaml(path: Path) -> dict:
 
 
 def _default_llm() -> LLM:
-    """Create a CrewAI LLM object (OpenAI via LiteLLM)."""
-    return LLM(
-        model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
-        temperature=0.2,
-    )
+    return LLM(model=os.getenv("MODEL_NAME", MODEL_NAME), temperature=0.2)
 
 
 def _mk_agent(name: str, spec: Dict[str, Any]) -> Agent:
@@ -64,7 +58,7 @@ class SegmentArchetype:
     dealbreakers: List[str]
 
 
-# ===== English guardrails & debug ============================================
+# ===== Guardrails & Debug =====================================================
 JSON_ONLY = (
     "FORMAT:\n"
     "- You MUST return exactly ONE valid JSON object. No markdown, no code fences, no commentary.\n"
@@ -77,13 +71,13 @@ EN_GUARD = (
 
 DEBUG_CREW = os.getenv("DEBUG_CREW", "0") == "1"
 
-# Answer “dials” from .env
+# Dials
 ANSWER_MIN_SENTENCES = int(os.getenv("ANSWER_MIN_SENTENCES", "3"))
 ANSWER_MAX_SENTENCES = int(os.getenv("ANSWER_MAX_SENTENCES", "6"))
 ENABLE_MICRO_PROBE = os.getenv("ENABLE_MICRO_PROBE", "1") == "1"
-DIVERSITY_REWRITE = os.getenv("DIVERSITY_REWRITE", "1") == "1"  # NEW
+DIVERSITY_REWRITE = os.getenv("DIVERSITY_REWRITE", "1") == "1"
 
-# English question banks (fallbacks)
+# Fallback-Fragen
 B2C_QUESTION_BANK = [
     "Walk me through a typical day and how you currently handle this area.",
     "What’s the most frustrating part of this situation — why?",
@@ -107,32 +101,23 @@ B2B_QUESTION_BANK = [
 
 class ValidationCrew:
     """
-    Orchestrates the full problem–solution fit flow:
-      - Segment identification + archetypes
-      - Interview guidelines
-      - (optional) Bias review
-      - Simulated interviews (interviewer + customer archetypes)
-      - Segment synthesis (robust, with representative quotes)
-      - Product requirements derivation (cross-segment + per-segment)
+    Orchestrates the full problem–solution fit flow.
     """
 
     def __init__(
         self,
-        tasks_yaml: Optional[str | Path] = None,
-        agents_yaml: Optional[str | Path] = None,
+        tasks_yaml: Optional[Union[str, Path]] = None,
+        agents_yaml: Optional[Union[str, Path]] = None,
     ):
-        # Default: YAMLs next to crew.py
         self.tasks_path = Path(tasks_yaml) if tasks_yaml else (PKG_DIR / "tasks.yaml")
         self.agents_path = Path(agents_yaml) if agents_yaml else (PKG_DIR / "agents.yaml")
 
         self.tasks_spec = _load_yaml(self.tasks_path)
         self.agents_spec = _load_yaml(self.agents_path)
 
-        # Fixed agents
+        # Agents
         self.agents: Dict[str, Agent] = {}
         self._init_fixed_agents()
-
-        # Dynamic customer agents (2 per segment)
         self.customer_agents: Dict[Tuple[str, str], Agent] = {}
 
         # Caches
@@ -258,7 +243,7 @@ class ValidationCrew:
             })
         return out
 
-    # ---------- Evidence: digest + evidence-anchored guidelines ----------
+    # ---------- Evidence ----------
     def digest_evidence(self) -> dict:
         if not hasattr(self, "evidence_by_segment"):
             self.evidence_by_segment = {}
@@ -500,8 +485,7 @@ class ValidationCrew:
         if not normalized:
             def _guess_type(segname: str, segtype: str) -> str:
                 t = (segtype or "").upper()
-                if t in ("B2B", "B2C"):
-                    return t
+                if t in ("B2B", "B2C"): return t
                 if any(k in (segname or "").lower() for k in ["company", "team", "enterprise", "business", "b2b"]):
                     return "B2B"
                 return "B2C"
@@ -536,11 +520,10 @@ class ValidationCrew:
             + "\n"
         )
         task = _mk_task(description, "A single JSON object.", agent)
-
         out = self._run_single(task)
         return self._safe_json(out)
 
-    # ---------- small sanitizer (remove boilerplate & tame % overload) ----------
+    # ---------- Sanitizer & Anti-Overlap ----------
     def _sanitize_text(self, s: str) -> str:
         if not s:
             return s
@@ -554,7 +537,7 @@ class ValidationCrew:
         for pat in patterns:
             txt = re.sub(pat, "", txt, flags=re.IGNORECASE).strip()
 
-        # Limit % signs: keep first %, convert others to "about N"
+        # %-Flut bremsen: nur die erste % lassen, weitere zu "about N"
         matches = list(re.finditer(r"(\b\d{1,3})\s?%", txt))
         if len(matches) > 1:
             offset = 0
@@ -568,7 +551,6 @@ class ValidationCrew:
         txt = re.sub(r"\s+", " ", txt).strip()
         return txt
 
-    # ---------- Anti-overlap helpers ----------
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
         parts = re.split(r'(?<=[.!?])\s+', (text or "").strip())
@@ -603,11 +585,9 @@ class ValidationCrew:
 
     @staticmethod
     def _extract_topics(answer: str) -> Set[str]:
-        """Grab durations, frequencies, and common wellness/usage activities + bigrams."""
         a = (answer or "").lower()
         topics: Set[str] = set()
 
-        # durations & frequencies
         for m in re.findall(r"\b\d{1,3}\s*(minutes?|hours?)\b", a):
             topics.add(m.strip())
         for m in re.findall(r"\b\d{1,3}\s*(x|times)\s*(per\s+)?(day|week|month)\b", a):
@@ -615,7 +595,6 @@ class ValidationCrew:
         for m in re.findall(r"\b(daily|every\s+morning|each\s+morning|every\s+day)\b", a):
             topics.add(m.strip())
 
-        # common activities (extendable)
         activity_words = [
             "meditation", "meditate", "mindfulness", "yoga", "breathing", "breathwork",
             "running", "jogging", "gym", "workout", "journaling", "journal",
@@ -625,19 +604,16 @@ class ValidationCrew:
             if w in a:
                 topics.add(w)
 
-        # bigrams as soft topics
         toks = [t for t in re.findall(r"[a-z0-9]+", a) if len(t) >= 3]
         for i in range(len(toks) - 1):
-            bg = f"{toks[i]} {toks[i+1]}"
-            topics.add(bg)
+            topics.add(f"{toks[i]} {toks[i+1]}")
 
-        # normalize short composites like "15 minutes meditation"
         for m in re.findall(r"\b\d{1,3}\s*minutes?\s+[a-z]{3,}\b", a):
             topics.add(m.strip())
+
         return topics
 
     def _deoverlap_and_align(self, answer: str, history: List[str], question: str) -> str:
-        """Drop near-duplicate sentences vs. earlier answers and make sure we reference the question."""
         prev_sents: List[str] = []
         for h in history[-6:]:
             prev_sents.extend(self._split_sentences(h))
@@ -668,7 +644,6 @@ class ValidationCrew:
         a = ans.lower()
         if any(b in a for b in banlist):
             return True
-        # high similarity vs last two answers
         last = " ".join(history[-2:])
         if last:
             jac = self._jaccard(self._tok(a), self._tok(last))
@@ -698,7 +673,7 @@ class ValidationCrew:
         out = self._sanitize_text(out)
         return out if out else draft
 
-    # ---------- intern ----------
+    # ---------- Simulation ----------
     def _simulate_dialogue(
         self,
         interviewer: Agent,
@@ -710,14 +685,14 @@ class ValidationCrew:
         transcript: List[Dict[str, str]] = []
         turns = 0
         history: List[str] = []
-        banlist: Set[str] = set()  # <- accumulates topics to AVOID repeating
+        banlist: Set[str] = set()  # Themen, die nicht wiederholt werden sollen
 
         for q in questions:
             if turns >= max_turns:
                 break
             transcript.append({"question": q, "answer": ""})
 
-            # Mini-evidence hint & brand extraction
+            # Evidence + Marken
             facts: List[str] = []
             brands: List[str] = []
             try:
@@ -759,7 +734,6 @@ class ValidationCrew:
                 last = " ".join(history[-2:])
                 history_snippet = f"\n\nYour previous points (for consistency): {last}"
 
-            # Explicit do-not-mention clause
             forbidden_list = ", ".join(sorted(list(banlist)))[:900] if banlist else ""
             forbidden_clause = (
                 f"\n\nDO NOT mention or allude to ANY of these earlier topics: {forbidden_list}."
@@ -792,13 +766,11 @@ class ValidationCrew:
             ans = self._sanitize_text(ans)
             ans = self._deoverlap_and_align(ans, history, q)
 
-            # Enforce diversity with a rewrite if needed
             if self._should_rewrite(ans, banlist, history):
                 ans = self._rewrite_for_diversity(q, ans, banlist, customer)
                 ans = self._sanitize_text(ans)
                 ans = self._deoverlap_and_align(ans, history, q)
 
-            # Optional micro-probe with repetition guard
             if ENABLE_MICRO_PROBE and (turns + 1 < max_turns):
                 probe = (
                     "Can you ground that in one fresh, concrete situation with a rough number (€, minutes/week, or times/week)? "
@@ -815,7 +787,6 @@ class ValidationCrew:
                 probe_ans = self._sanitize_text(probe_ans)
                 probe_ans = self._deoverlap_and_align(probe_ans, history + [ans], q)
 
-                # If the probe reintroduced banned content, rewrite it too
                 if self._should_rewrite(probe_ans, banlist, history + [ans]):
                     probe_ans = self._rewrite_for_diversity(q, probe_ans, banlist, customer)
                     probe_ans = self._sanitize_text(probe_ans)
@@ -823,7 +794,6 @@ class ValidationCrew:
 
                 ans = (ans + " " + probe_ans).strip()
 
-            # Tiny resonance check sentence (if we had facts), also diversity-guarded
             if facts:
                 chk = (
                     "If you think about it: does any of this resonate with things you've seen/heard recently? "
@@ -843,45 +813,32 @@ class ValidationCrew:
                     chk_ans = self._deoverlap_and_align(chk_ans, history + [ans], q)
                 ans = (ans + " " + chk_ans).strip()
 
-            # Final store
             transcript[-1]["answer"] = ans
             history.append(ans)
 
-            # Update banlist with new topics found in this answer to avoid reuse
+            # banlist updaten, um Wiederholungen zu vermeiden
             banlist |= self._extract_topics(ans)
-
-            # Strongly blacklist the prototypical repetition: "15 minutes meditation" / "30 minutes yoga" etc.
-            hard_repeats = re.findall(r"\b\d{1,2}\s*minutes?\s*(of\s+)?(meditation|mindfulness|yoga|breathing|breathwork)\b", ans.lower())
+            hard_repeats = re.findall(
+                r"\b\d{1,2}\s*minutes?\s*(of\s+)?(meditation|mindfulness|yoga|breathing|breathwork)\b",
+                ans.lower()
+            )
             for _ in hard_repeats:
-                banlist.add("minutes meditation")
-                banlist.add("minutes mindfulness")
-                banlist.add("minutes yoga")
-                banlist.add("minutes breathing")
-                banlist.add("breathwork")
-                # also generic activity words to steer away
-                banlist.add("meditation")
-                banlist.add("mindfulness")
-                banlist.add("yoga")
+                banlist.update({
+                    "minutes meditation", "minutes mindfulness", "minutes yoga",
+                    "minutes breathing", "breathwork", "meditation", "mindfulness", "yoga"
+                })
 
             turns += 1
 
         return transcript
 
     def _instantiate_customer_agents(self, archetypes: List[Dict[str, Any]]):
-        t_crit = next(
-            (t for t in self.customer_templates if t.get("template_name") == "customer_critical_template"),
-            None,
-        )
-        t_open = next(
-            (t for t in self.customer_templates if t.get("template_name") == "customer_open_reflective_template"),
-            None,
-        )
+        t_crit = next((t for t in self.customer_templates if t.get("template_name") == "customer_critical_template"), None)
+        t_open = next((t for t in self.customer_templates if t.get("template_name") == "customer_open_reflective_template"), None)
 
         def build_from_tpl(tpl: Dict[str, Any], seg_name: str, cust: Dict[str, Any]) -> Agent:
-            seg_slug = seg_name.lower().replace(" ", "_")
             role = tpl.get("role", "").replace("{{segment_name}}", seg_name)
             goal = tpl.get("goal", "").replace("{{segment_name}}", seg_name)
-            _ = tpl.get("name", "customer").replace("{{segment_slug}}", seg_slug)
             backstory = cust.get("backstory", "")
             response_style = cust.get("response_style", "")
             motivations = ", ".join(cust.get("motivations", []))
@@ -899,7 +856,7 @@ class ValidationCrew:
                 ),
                 allow_delegation=False,
                 verbose=False,
-                llm=LLM(model=os.getenv("MODEL_NAME", "gpt-4o-mini"), temperature=0.5, max_tokens=300),
+                llm=LLM(model=os.getenv("MODEL_NAME", MODEL_NAME), temperature=0.5, max_tokens=300),
             )
 
         for block in archetypes:
@@ -934,15 +891,13 @@ class ValidationCrew:
 
     def _safe_json(self, text_out: Any) -> Dict[str, Any]:
         s = str(text_out).strip()
-
         try:
             return json.loads(s)
         except Exception:
             pass
 
         if "```" in s:
-            parts = s.split("```")
-            for p in parts:
+            for p in s.split("```"):
                 p = p.strip()
                 if p.startswith("{") and p.endswith("}"):
                     try:
@@ -958,10 +913,9 @@ class ValidationCrew:
                 return json.loads(candidate)
             except Exception:
                 pass
-
         return {}
 
-    # ---------- Public API (remaining steps) ----------
+    # ---------- Public API ----------
     def run_interviews_per_segment(self, max_turns: int = 20) -> List[Dict[str, Any]]:
         interviewer = self.agents.get("interviewer")
         if interviewer is None:
@@ -969,14 +923,12 @@ class ValidationCrew:
 
         results: List[Dict[str, Any]] = []
 
-        # Normalize guidelines to [{"segment": str, "questions": [..]}]
         if self.segment_guidelines and isinstance(self.segment_guidelines, list) and \
            isinstance(self.segment_guidelines[0], dict) and "questions" in self.segment_guidelines[0]:
             normalized_guidelines = self.segment_guidelines
         else:
             normalized_guidelines = self._normalize_guidelines({"segment_guidelines": self.segment_guidelines})
 
-        # map: segment -> questions
         q_map: Dict[str, List[str]] = {
             g["segment"]: g.get("questions", [])
             for g in normalized_guidelines
@@ -989,7 +941,6 @@ class ValidationCrew:
             self.interviews = []
             return self.interviews
 
-        # Ensure customer agents exist for each segment and run
         for segment, questions in q_map.items():
             if not self.customer_agents.get((segment, "critical")) and not self.customer_agents.get((segment, "open_reflective")):
                 block = next((a for a in self.archetypes if a.get("segment") == segment), None)
@@ -1164,7 +1115,7 @@ class ValidationCrew:
             "per_segment_requirements": norm_per,
         }
 
-    def derive_product_requirements(self) -> Dict[str, Any]]:
+    def derive_product_requirements(self) -> Dict[str, Any]:
         product_owner = (
             self.agents.get("product_owner")
             or self.agents.get("strategist")
@@ -1220,12 +1171,8 @@ class ValidationCrew:
         self.comparison = {}
         return self.comparison
 
-    # ---------- UI helper (missing earlier) ----------
+    # ---------- UI Helper ----------
     def segments_with_archetypes(self) -> List[Dict[str, Any]]:
-        """
-        Utility to merge archetypes into segments for nicer UI rendering.
-        Does not change pipeline behavior.
-        """
         by_seg = {a["segment"]: a.get("customers", []) for a in self.archetypes}
         merged: List[Dict[str, Any]] = []
         for s in self.segments:
