@@ -101,46 +101,54 @@ os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
 
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
 # Crew import (case-robust)
 # -----------------------------------------------------------------------------
-try:
-    from .crew import ValidationCrew  # relative
-except Exception as _e1:
+ValidationCrew = None
+_last_err = None
+
+for _path in (".crew", "CustomerInterview.crew", "customer_interview.crew"):
     try:
-        from CustomerInterview.crew import ValidationCrew  # absolute (capitalized)
-    except Exception as _e2:
-        try:
-            from customer_interview.crew import ValidationCrew  # absolute (lowercase)
-        except Exception as _e3:
-            # zeig den eigentlichsten Fehler an
-            raise _e3
+        if _path == ".crew":
+            from .crew import ValidationCrew as _VC
+        elif _path == "CustomerInterview.crew":
+            from CustomerInterview.crew import ValidationCrew as _VC
+        else:
+            from customer_interview.crew import ValidationCrew as _VC
+        ValidationCrew = _VC
+        break
+    except Exception as _e:
+        _last_err = _e
+
+if ValidationCrew is None:
+    raise ImportError(
+        "Could not import ValidationCrew; tried .crew, CustomerInterview.crew, customer_interview.crew"
+    ) from _last_err
+
 
 # --- Web search provider (lazy import, case-robust) --------------------------
 def _get_search():
-    """
-    Liefert einen Search-Provider oder None, ohne Exceptions nach außen.
-    """
+    """Return a search provider instance or None, never raising outward."""
     # 1) relative
     try:
-        from .integrations.search_factory import get_search_provider
-        return get_search_provider()
+        from .integrations.search_factory import get_search_provider as _g
+        return _g()
     except Exception:
         pass
     # 2) absolute (capitalized)
     try:
-        from CustomerInterview.integrations.search_factory import get_search_provider
-        return get_search_provider()
+        from CustomerInterview.integrations.search_factory import get_search_provider as _g
+        return _g()
     except Exception:
         pass
     # 3) absolute (lowercase)
     try:
-        from customer_interview.integrations.search_factory import get_search_provider
-        return get_search_provider()
+        from customer_interview.integrations.search_factory import get_search_provider as _g
+        return _g()
     except Exception:
         pass
-    # 4) Fallback
+    # 4) fallback
     return None
+
 
 
 # -----------------------------------------------------------------------------
