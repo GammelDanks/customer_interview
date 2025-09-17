@@ -8,10 +8,14 @@ import streamlit as st
 import pandas as pd
 
 # -----------------------------------------------------------------------------
+# UI config as early as possible
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Customer Interview Crew", page_icon="🧩", layout="wide")
+
+# -----------------------------------------------------------------------------
 # Path repair so we can import whether we run:
 #   streamlit run src/customer_interview/app.py
 # or with PYTHONPATH=./src
-
 # -----------------------------------------------------------------------------
 _THIS = Path(__file__).resolve()
 ROOT = _THIS.parents[2] if len(_THIS.parents) >= 2 else _THIS.parent
@@ -65,7 +69,7 @@ def _hydrate_keys_from_secrets():
 
     # optionale Flags
     for k in ("MODEL_NAME", "YOU_SEARCH_ENABLED", "ANSWER_MIN_SENTENCES",
-              "ANSWER_MAX_SENTENCES", "ENABLE_MICRO_PROBE"):
+              "ANSWER_MAX_SENTENCES", "ENABLE_MICRO_PROBE", "YOU_MAX_RESULTS"):
         if not os.getenv(k, "").strip():
             try:
                 if k in st.secrets:
@@ -75,7 +79,6 @@ def _hydrate_keys_from_secrets():
 
 # 1. Hydration so früh wie möglich
 _hydrate_keys_from_secrets()
-# -----------------------------------------------------------------------------
 
 # --- SQLite upgrade shim (force pysqlite3 if stdlib sqlite is too old) -------
 import sys as _sys
@@ -99,12 +102,13 @@ except Exception:
         pass
 
 # -----------------------------------------------------------------------------
-
 # Basic env defaults
+# -----------------------------------------------------------------------------
 os.environ.setdefault("MODEL_NAME", os.getenv("MODEL_NAME", "gpt-4o-mini"))
 os.environ.setdefault("ANSWER_MIN_SENTENCES", "3")
 os.environ.setdefault("ANSWER_MAX_SENTENCES", "6")
 os.environ.setdefault("ENABLE_MICRO_PROBE", "1")
+os.environ.setdefault("YOU_MAX_RESULTS", os.getenv("YOU_MAX_RESULTS", "6"))
 
 # -----------------------------------------------------------------------------
 # Crew import (absolute, lowercase)
@@ -123,8 +127,6 @@ except Exception as _e:
     st.code("".join(traceback.format_exception_only(type(_e), _e)))
     st.stop()
 
-
-
 # --- Web search provider (lazy import) ---------------------------------------
 def _get_search():
     """Return a search provider instance or None, never raising outward."""
@@ -133,7 +135,6 @@ def _get_search():
         return get_search_provider()
     except Exception:
         return None
-
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -180,7 +181,7 @@ def render_segments_with_archetypes(st_container, merged):
             else:
                 st.caption("—")
             st.markdown("**Adoption likelihood**")
-            st.write(seg.get("adoption_likelihood") or "—")
+            st.write(seg.get("adoption_likelihood") or seg.get("likelihood_to_adopt") or "—")
         with cols[1]:
             st.markdown("**Willingness to pay**")
             st.write(seg.get("willingness_to_pay") or "—")
@@ -277,73 +278,8 @@ def render_requirements(st_container, requirements_dict: dict):
         st_container.caption("—")
 
 # -----------------------------------------------------------------------------
-# UI
+# Domain-aware evidence query builder (multi-industry)
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Customer Interview Crew", page_icon="🧩", layout="wide")
-st.title("🧩 Customer Interview Crew")
-st.caption("Define idea → segment customers → guidelines → simulate interviews → synthesize → requirements.")
-
-with st.sidebar:
-    st.subheader("Settings")
-
-    st.markdown("---")
-    st.write("**Run options**")
-    max_questions = st.slider("Max questions per segment", 5, 20, 12, 1)
-    max_turns = st.slider("Max turns per interview", 4, 20, 8, 1)
-    max_segments = st.slider("Max segments", 1, 5, 3, 1, help="Hard-cap to avoid overload.")
-
-    st.markdown("---")
-    debug = st.checkbox("Verbose debug (console)", value=False, help="Sets DEBUG_CREW=1 for raw model outputs.")
-    os.environ["DEBUG_CREW"] = "1" if debug else "0"
-
-    st.markdown("---")
-    st.write("**Web search (You.com)**")
-    use_search = st.toggle("Use web search (You.com)", value=os.getenv("YOU_SEARCH_ENABLED","false").lower()=="true")
-    os.environ["YOU_SEARCH_ENABLED"] = "true" if use_search else "false"
-    you_k = st.slider("Max results per query (You.com)", 3, 10, int(os.getenv("YOU_MAX_RESULTS","6")), 1)
-    os.environ["YOU_MAX_RESULTS"] = str(you_k)
-
-# Inputs
-st.header("1) Describe the problem and the solution idea")
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    problem_summary = st.text_area("Problem summary *(optional)*", height=150)
-with col2:
-    value_prop = st.text_area("Solution & value proposition *(optional)*", height=150)
-with col3:
-    core_tech = st.text_area("Core technologies *(optional)*", height=150)
-
-business_idea = "\n".join(
-    [
-        ensure_english_guardrail(""),
-        f"Problem: {problem_summary.strip()}" if problem_summary else "",
-        f"Solution & value proposition: {value_prop.strip()}" if value_prop else "",
-        f"Core technologies: {core_tech.strip()}" if core_tech else "",
-    ]
-).strip()
-
-if not problem_summary and not value_prop and not core_tech:
-    business_idea = ensure_english_guardrail(textwrap.dedent("""
-        Problem: Busy professionals struggle to maintain healthy eating habits due to lack of time and decision fatigue.
-        Solution & value proposition: An AI-powered nutrition coach that plans meals, suggests quick options, and adapts to preferences and constraints while protecting privacy.
-        Core technologies: Mobile app, LLM for dialogue & guidance, recommendation engine, calendar integration.
-    """).strip())
-
-market_context = "Target geography: EU. Target channels: mobile-first. Keep all outputs in English."
-constraints = ["privacy-by-design", "low-friction onboarding", "mobile-first UX"]
-
-run_clicked = st.button("▶️ Run pipeline")
-st.markdown("---")
-
-# Output containers
-seg_box = st.container()
-guide_box = st.container()
-int_box = st.container()
-sum_box = st.container()
-req_box = st.container()
-
-# --- Domain-aware evidence query builder (multi-industry) --------------------
 GENERIC_NEGATIVES = [
     "-accounting", "-finance", "-tax", "-crm", "-timesheet", "-payroll", "-bookkeeping",
     "-construction", "-law", "-legal software", "-project management software",
@@ -526,23 +462,12 @@ def _query_variants_for_segment(seg_name: str, seg_type: str, idea_text: str) ->
         variants.append(core)
     return variants
 
-def _get_search():
-    try:
-        from .integrations.search_factory import get_search_provider
-    except Exception:
-        try:
-            from customer_interview.integrations.search_factory import get_search_provider
-        except Exception:
-            def get_search_provider():
-                return None
-    return get_search_provider()
-
 def _fetch_evidence_for_segments(segments: list[dict], k: int = 6) -> dict[str, list[dict]]:
     provider = _get_search()
     if provider is None or os.getenv("YOU_SEARCH_ENABLED","false").lower() != "true":
         return {}
     out: dict[str, list[dict]] = {}
-    idea_text = ""  # keep simple
+    idea_text = ""  # keep simple / optional
     for s in segments or []:
         seg_name = s.get("name") or "Segment"
         seg_type = s.get("type") or ""
@@ -554,6 +479,7 @@ def _fetch_evidence_for_segments(segments: list[dict], k: int = 6) -> dict[str, 
                 title = (h.get("title") or url or "")[:180]
                 if url:
                     items.append({"title": title, "url": url})
+        # dedupe & cap
         seen = set(); dedup = []
         for r in items:
             u = r["url"]
@@ -603,6 +529,72 @@ def _ensure_guidelines_cover_segments(crew, guidelines: list[dict]) -> list[dict
             t = (s.get("type") or "").upper()
             out.append({"segment": name, "questions": (B2B_FALLBACK if t == "B2B" else B2C_FALLBACK)})
     return out
+
+# -----------------------------------------------------------------------------
+# UI
+# -----------------------------------------------------------------------------
+st.title("🧩 Customer Interview Crew")
+st.caption("Define idea → segment customers → guidelines → simulate interviews → synthesize → requirements.")
+
+with st.sidebar:
+    st.subheader("Settings")
+
+    st.markdown("---")
+    st.write("**Run options**")
+    max_questions = st.slider("Max questions per segment", 5, 20, 12, 1)
+    max_turns = st.slider("Max turns per interview", 4, 20, 8, 1)
+    max_segments = st.slider("Max segments", 1, 5, 3, 1, help="Hard-cap to avoid overload.")
+
+    st.markdown("---")
+    debug = st.checkbox("Verbose debug (console)", value=False, help="Sets DEBUG_CREW=1 for raw model outputs.")
+    os.environ["DEBUG_CREW"] = "1" if debug else "0"
+
+    st.markdown("---")
+    st.write("**Web search (You.com)**")
+    use_search = st.toggle("Use web search (You.com)", value=os.getenv("YOU_SEARCH_ENABLED","false").lower()=="true")
+    os.environ["YOU_SEARCH_ENABLED"] = "true" if use_search else "false"
+    you_k = st.slider("Max results per query (You.com)", 3, 10, int(os.getenv("YOU_MAX_RESULTS","6")), 1)
+    os.environ["YOU_MAX_RESULTS"] = str(you_k)
+
+# Inputs
+st.header("1) Describe the problem and the solution idea")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    problem_summary = st.text_area("Problem summary *(optional)*", height=150)
+with col2:
+    value_prop = st.text_area("Solution & value proposition *(optional)*", height=150)
+with col3:
+    core_tech = st.text_area("Core technologies *(optional)*", height=150)
+
+business_idea = "\n".join(
+    [
+        ensure_english_guardrail(""),
+        f"Problem: {problem_summary.strip()}" if problem_summary else "",
+        f"Solution & value proposition: {value_prop.strip()}" if value_prop else "",
+        f"Core technologies: {core_tech.strip()}" if core_tech else "",
+    ]
+).strip()
+
+if not problem_summary and not value_prop and not core_tech:
+    business_idea = ensure_english_guardrail(textwrap.dedent("""
+        Problem: Busy professionals struggle to maintain healthy eating habits due to lack of time and decision fatigue.
+        Solution & value proposition: An AI-powered nutrition coach that plans meals, suggests quick options, and adapts to preferences and constraints while protecting privacy.
+        Core technologies: Mobile app, LLM for dialogue & guidance, recommendation engine, calendar integration.
+    """).strip())
+
+market_context = "Target geography: EU. Target channels: mobile-first. Keep all outputs in English."
+constraints = ["privacy-by-design", "low-friction onboarding", "mobile-first UX"]
+
+run_clicked = st.button("▶️ Run pipeline")
+st.markdown("---")
+
+# Output containers
+seg_box = st.container()
+guide_box = st.container()
+int_box = st.container()
+sum_box = st.container()
+req_box = st.container()
 
 # -----------------------------------------------------------------------------
 # RUN
